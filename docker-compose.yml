@@ -1,0 +1,12 @@
+services:
+  vpn_bot:
+    build: .
+    container_name: colivingfam-vpn-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - bot_data:/data
+
+volumes:
+  bot_data:
