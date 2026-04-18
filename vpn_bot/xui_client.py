@@ -98,6 +98,9 @@ class XuiClient:
         client_uuid = str(uuid.uuid4())
         sub_id = _rand_sub_id(16)
         fl = self._s.xui_vless_flow or ""
+        limitIp = self._s.xui_limit_ip or 0
+        totalGB = self._s.xui_total_gb or 0
+
         client_obj: dict[str, Any] = {
             "id": client_uuid,
             "email": email,
@@ -105,8 +108,8 @@ class XuiClient:
             "password": "",
             "flow": fl,
             "encryption": "none",
-            "limitIp": 0,
-            "totalGB": 0,
+            "limitIp": limitIp,
+            "totalGB": totalGB,
             "expiryTime": 0,
             "enable": True,
             "tgId": tg_id,

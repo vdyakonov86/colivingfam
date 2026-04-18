@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     xui_password: str = Field(validation_alias="XUI_PASSWORD")
     xui_inbound_id: int = Field(validation_alias="XUI_INBOUND_ID")
     xui_vless_flow: str = Field(default="", validation_alias="XUI_VLESS_FLOW")
+    xui_limit_ip: int = Field(default=0, validation_alias="XUI_LIMIT_IP")
+    xui_total_gb: int = Field(default=0, validation_alias="XUI_TOTAL_GB")
     subscription_base_url: str = Field(default="", validation_alias="SUBSCRIPTION_BASE_URL")
     xui_verify_tls: bool = Field(default=True, validation_alias="XUI_VERIFY_TLS")
 
