@@ -97,24 +97,23 @@ class XuiClient:
         """Build one VLESS client object for 3x-ui. Returns (client_dict, client_uuid, sub_id)."""
         client_uuid = str(uuid.uuid4())
         sub_id = _rand_sub_id(16)
-        fl = self._s.xui_vless_flow or ""
-        limitIp = self._s.xui_limit_ip or 0
-        totalGB = self._s.xui_total_gb or 0
+        # flow = self._s.xui_vless_flow or ""
+
+        limit_ip = int(self._s.xui_limit_ip or 0)
+        total_gb = int(self._s.xui_total_gb or 0)
 
         client_obj: dict[str, Any] = {
             "id": client_uuid,
             "email": email,
-            "security": "",
-            "password": "",
-            "flow": fl,
-            "encryption": "none",
-            "limitIp": limitIp,
-            "totalGB": totalGB,
+            "flow": "",
+            "limitIp": limit_ip,
+            "totalGB": total_gb,
             "expiryTime": 0,
             "enable": True,
             "tgId": tg_id,
             "subId": sub_id,
             "comment": "",
+            "reset": 0
         }
         return client_obj, client_uuid, sub_id
 

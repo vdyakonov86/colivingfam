@@ -14,9 +14,9 @@ def make_client_email(room: str, last_name: str, first_name: str) -> str:
     first_a = _slug_part(first_name)
     tail = secrets.token_hex(3)
     base = "_".join(p for p in (room_n, last_a, first_a, tail) if p)
-    email = f"fam_{base}"[:56]
-    if not email or email == "fam_":
-        email = f"fam_{room_n}_{tail}"
+    email = f"{base}"[:56]
+    if not email:
+        email = f"{room_n}_{tail}"
     return email
 
 
