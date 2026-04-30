@@ -6,14 +6,14 @@ import secrets
 import time
 
 from aiogram import F, Router
-from aiogram.filters import Command, CommandStart, StateFilter
+from aiogram.filters import Command, CommandStart, CommandObject, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from vpn_bot.config import Settings
 from vpn_bot.db import Database, normalize_room
 from vpn_bot.filters import IsAdmin
-from vpn_bot.keyboards import admin_main_kb, cancel_reply_kb, residents_pick_inline, rooms_reply_kb
+from vpn_bot.keyboards import admin_main_kb, cancel_reply_kb, residents_pick_inline, rooms_reply_kb, resident_menu_kb
 from vpn_bot.slug import make_client_email
 from vpn_bot.states import AddResidentStates
 from vpn_bot.texts import format_residents_list
@@ -27,15 +27,56 @@ def build_admin_router(settings: Settings, db: Database, xui: XuiClient) -> Rout
     is_admin = IsAdmin(settings)
 
     @router.message(CommandStart(), is_admin)
-    async def admin_start(message: Message) -> None:
-        await message.answer(
-            "Админ-панель бота коливинга. Выберите действие кнопками ниже.",
-            reply_markup=admin_main_kb(),
-        )
+    async def admin_start(message: Message, command: CommandObject) -> None:
+
+        args = (command.args or "").strip()
+        if args.startswith("link_"):
+            code = args.removeprefix("link_").strip()
+            lc = await db.consume_link_code(code)
+            if not lc:
+                await message.answer("Код недействителен или истёк. Запросите новый у администратора.")
+                return
+            r = await db.get_resident(lc.resident_id)
+            if not r:
+                await message.answer("Ошибка: запись не найдена.")
+                return
+            if r.telegram_user_id is not None:
+                await message.answer("Этот житель уже привязан к другому Telegram.")
+                return
+            await db.bind_telegram(r.id, message.from_user.id)
+            await message.answer(
+                f"Привязка выполнена: {html.escape(r.last_name)} {html.escape(r.first_name)}, {html.escape(r.room)}.\n"
+                "Ниже меню для получения ссылки и QR.",
+                reply_markup=resident_menu_kb(),
+            )
+            return
+        else:
+            await message.answer(
+                "Админ-панель бота коливинга. Выберите действие кнопками ниже.",
+                reply_markup=admin_main_kb(),
+            )
 
     @router.message(Command("admin"), is_admin)
     async def admin_cmd(message: Message) -> None:
         await message.answer("Меню администратора.", reply_markup=admin_main_kb())
+
+    @router.message(Command("test"), is_admin)
+    async def test_cmd(message: Message) -> None:
+        if message.from_user is None:
+            return
+
+        r = await db.get_resident_by_telegram(message.from_user.id)
+        if r:
+            await message.answer(
+                f"{html.escape(r.first_name)}, ваше меню:",
+                reply_markup=resident_menu_kb(),
+            )
+            return
+
+        await message.answer(
+            "Вы не привязаны к коливингу. Попросите у администратора код привязки и откройте ссылку, "
+            "или отправьте команду из приглашения.",
+        )
 
     @router.message(F.text == "Список жителей", is_admin)
     async def list_residents(message: Message) -> None:
