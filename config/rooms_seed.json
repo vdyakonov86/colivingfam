@@ -1,0 +1,52 @@
+{
+  "rooms": [
+    {
+      "room_number": "F1",
+      "max_residents": 4
+    },
+    {
+      "room_number": "F2",
+      "max_residents": 4
+    },
+    {
+      "room_number": "F3",
+      "max_residents": 2
+    },
+    {
+      "room_number": "F4",
+      "max_residents": 4
+    },
+    {
+      "room_number": "F5",
+      "max_residents": 4
+    },
+    {
+      "room_number": "F6",
+      "max_residents": 4
+    },
+    {
+      "room_number": "F7",
+      "max_residents": 4
+    },
+    {
+      "room_number": "F8",
+      "max_residents": 4
+    },
+    {
+      "room_number": "F9",
+      "max_residents": 4
+    },
+    {
+      "room_number": "F10",
+      "max_residents": 4
+    },
+    {
+      "room_number": "F11",
+      "max_residents": 4
+    },
+    {
+      "room_number": "F12",
+      "max_residents": 4
+    }
+  ]
+}

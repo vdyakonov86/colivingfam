@@ -19,6 +19,7 @@ class Settings(BaseSettings):
         validation_alias="TELEGRAM_ADMIN_IDS",
     )
     database_path: str = Field(default="data/app.db", validation_alias="DATABASE_PATH")
+    seed_rooms_path: str = Field(default="config/rooms_seed.json", validation_alias="SEED_ROOMS_PATH")
     max_residents: int = Field(default=50, ge=1, le=500, validation_alias="MAX_RESIDENTS")
 
     xui_base_url: str = Field(validation_alias="XUI_BASE_URL")

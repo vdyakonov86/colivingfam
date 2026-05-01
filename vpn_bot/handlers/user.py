@@ -33,16 +33,23 @@ def build_user_router(settings: Settings, db: Database, xui: XuiClient) -> Route
                     "Код недействителен или истёк. Запросите новый у администратора.",
                 )
                 return
-            r = await db.get_resident(lc.resident_id)
+            r, room_number = await db.get_resident_with_room_by_id(lc.resident_id)
             if not r:
                 await message.answer("Ошибка: запись не найдена.")
                 return
+
+            r_binded = await db.get_resident_by_telegram(message.from_user.id)
+            if r_binded:
+                await message.answer("К вашему Telegram уже прикреплена ссылка для подписки. Обратитесь к администратору")
+                return
+
             if r.telegram_user_id is not None:
                 await message.answer("Этот житель уже привязан к другому Telegram.")
                 return
+                
             await db.bind_telegram(r.id, message.from_user.id)
             await message.answer(
-                f"Привязка выполнена: {html.escape(r.last_name)} {html.escape(r.first_name)}, {html.escape(r.room)}.\n"
+                f"Привязка выполнена: {html.escape(r.last_name)} {html.escape(r.first_name)}, {html.escape(room_number)}.\n"
                 "Ниже меню для получения ссылки и QR.",
                 reply_markup=resident_menu_kb(),
             )

@@ -7,5 +7,6 @@ services:
       - .env
     volumes:
       - ./vpn_bot:/app/vpn_bot:rw
+      - ./config:/app/vpn_bot/config:rw
       - ./data:/data:rw
     command: ["sh", "-c", "watchfiles --filter python 'python -m vpn_bot' /app/vpn_bot"]

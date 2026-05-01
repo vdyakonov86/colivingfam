@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
+from vpn_bot.db import Resident
 
 
 def rooms_reply_kb() -> ReplyKeyboardMarkup:
@@ -38,10 +39,10 @@ def cancel_reply_kb() -> ReplyKeyboardMarkup:
     )
 
 
-def residents_pick_inline(residents: list, *, prefix: str) -> InlineKeyboardMarkup:
+def residents_pick_inline(residents: list[tuple[str, Resident]], *, prefix: str) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    for r in residents:
-        label = f"{r.room} — {r.last_name} {r.first_name}"
+    for (room_number, r) in residents:
+        label = f"{room_number} — {r.last_name} {r.first_name}"
         b.add(InlineKeyboardButton(text=label[:64], callback_data=f"{prefix}:{r.id}"))
     b.adjust(1)
     return b.as_markup()

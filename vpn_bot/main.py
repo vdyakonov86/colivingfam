@@ -25,7 +25,7 @@ async def async_main() -> None:
     settings = get_settings()
     Path(settings.database_path).parent.mkdir(parents=True, exist_ok=True)
 
-    db = Database(settings.database_path)
+    db = Database(settings.database_path, settings.seed_rooms_path)
     await db.init()
 
     xui = XuiClient(settings)

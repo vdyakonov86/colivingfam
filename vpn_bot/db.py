@@ -4,7 +4,7 @@ import re
 import time
 from dataclasses import dataclass
 from typing import Any, Sequence
-
+import json
 import aiosqlite
 
 ROOM_RE = re.compile(r"^F(1[0-2]|[1-9])$", re.IGNORECASE)
@@ -22,13 +22,20 @@ class Resident:
     id: int
     first_name: str
     last_name: str
-    room: str
+    room_id: int
     telegram_user_id: int | None
     xui_email: str
-    xui_client_id: str
+    xui_uuid: str
     xui_sub_id: str
     created_at: int
 
+
+@dataclass
+class Room:
+    id: int
+    room_number: str
+    max_residents: int
+    created_at: int
 
 @dataclass
 class LinkCode:
@@ -38,8 +45,9 @@ class LinkCode:
 
 
 class Database:
-    def __init__(self, path: str) -> None:
+    def __init__(self, path: str, seed_rooms_path: str) -> None:
         self.path = path
+        self.seed_rooms_path = seed_rooms_path
 
     async def connect(self) -> aiosqlite.Connection:
         conn = await aiosqlite.connect(self.path)
@@ -51,26 +59,39 @@ class Database:
         async with aiosqlite.connect(self.path) as db:
             await db.executescript(
                 """
+                CREATE TABLE IF NOT EXISTS rooms (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    room_number TEXT UNIQUE NOT NULL,  
+                    max_residents INTEGER NOT NULL,  
+                    created_at INTEGER NOT NULL
+                );
+
                 CREATE TABLE IF NOT EXISTS residents (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     first_name TEXT NOT NULL,
                     last_name TEXT NOT NULL,
-                    room TEXT NOT NULL,
+                    room_id INTEGER NOT NULL,
                     telegram_user_id INTEGER UNIQUE,
                     xui_email TEXT NOT NULL UNIQUE,
-                    xui_client_id TEXT NOT NULL,
+                    xui_uuid TEXT NOT NULL UNIQUE,
                     xui_sub_id TEXT NOT NULL,
-                    created_at INTEGER NOT NULL
+                    created_at INTEGER NOT NULL,
+                    FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE RESTRICT
                 );
+
+                CREATE INDEX IF NOT EXISTS idx_residents_room_id ON residents(room_id);
+
                 CREATE TABLE IF NOT EXISTS link_codes (
                     code TEXT PRIMARY KEY,
-                    resident_id INTEGER NOT NULL REFERENCES residents(id) ON DELETE CASCADE,
-                    expires_at INTEGER NOT NULL
+                    resident_id INTEGER NOT NULL,
+                    expires_at INTEGER NOT NULL,
+                    FOREIGN KEY (resident_id) REFERENCES residents(id) ON DELETE CASCADE
                 );
-                CREATE INDEX IF NOT EXISTS idx_residents_room ON residents(room);
                 """
             )
             await db.commit()
+
+        await self.seed_rooms_from_json(self.seed_rooms_path)
 
     async def count_residents(self) -> int:
         async with aiosqlite.connect(self.path) as db:
@@ -82,30 +103,41 @@ class Database:
         self,
         first_name: str,
         last_name: str,
-        room: str,
+        room_number: str,
         xui_email: str,
-        xui_client_id: str,
+        xui_uuid: str,
         xui_sub_id: str,
     ) -> int:
-        room = normalize_room(room)
+        room_number = normalize_room(room_number)
+        room_id = await self.get_room_id_by_room_number(room_number)
+        if room_id is None:
+            raise ValueError("Комната не найдена")
+
         now = int(time.time())
         async with aiosqlite.connect(self.path) as db:
             cur = await db.execute(
                 """
-                INSERT INTO residents (first_name, last_name, room, telegram_user_id, xui_email, xui_client_id, xui_sub_id, created_at)
+                INSERT INTO residents (first_name, last_name, room_id, telegram_user_id, xui_email, xui_uuid, xui_sub_id, created_at)
                 VALUES (?, ?, ?, NULL, ?, ?, ?, ?)
                 """,
-                (first_name.strip(), last_name.strip(), room, xui_email, xui_client_id, xui_sub_id, now),
+                (first_name.strip(), last_name.strip(), room_id, xui_email, xui_uuid, xui_sub_id, now),
             )
             await db.commit()
             return int(cur.lastrowid)
+
+    async def get_room_id_by_room_number(self, room_number: str) -> int | None:
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute("SELECT id FROM rooms WHERE room_number = ?", (room_number,))
+            row = await cur.fetchone()
+            return int(row["id"]) if row else None
 
     async def delete_resident(self, resident_id: int) -> None:
         async with aiosqlite.connect(self.path) as db:
             await db.execute("DELETE FROM residents WHERE id = ?", (resident_id,))
             await db.commit()
 
-    async def get_resident(self, resident_id: int) -> Resident | None:
+    async def get_resident_by_id(self, resident_id: int) -> Resident | None:
         async with aiosqlite.connect(self.path) as db:
             db.row_factory = aiosqlite.Row
             cur = await db.execute("SELECT * FROM residents WHERE id = ?", (resident_id,))
@@ -113,6 +145,19 @@ class Database:
             if not row:
                 return None
             return _row_to_resident(row)
+
+    async def get_resident_with_room_by_id(self, resident_id: int) -> tuple[Resident, str] | None:
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                """SELECT residents.*, rooms.room_number FROM residents
+                JOIN rooms ON residents.room_id = rooms.id
+                WHERE residents.id = ?
+                """, (resident_id,))
+            row = await cur.fetchone()
+            if not row:
+                return None
+            return _row_to_resident(row), str(row["room_number"])
 
     async def get_resident_by_telegram(self, telegram_user_id: int) -> Resident | None:
         async with aiosqlite.connect(self.path) as db:
@@ -132,15 +177,40 @@ class Database:
             db.row_factory = aiosqlite.Row
             cur = await db.execute(
                 """
-                SELECT * FROM residents
-                ORDER BY
-                  CAST(SUBSTR(room, 2) AS INTEGER),
-                  last_name COLLATE NOCASE,
-                  first_name COLLATE NOCASE
+                SELECT residents.* 
+                FROM residents 
+                JOIN rooms ON residents.room_id = rooms.id 
+                ORDER BY 
+                    CAST(SUBSTR(rooms.room_number, 2) AS INTEGER),
+                    residents.last_name COLLATE NOCASE,
+                    residents.first_name COLLATE NOCASE
                 """
             )
             rows: Sequence[Any] = await cur.fetchall()
             return [_row_to_resident(r) for r in rows]
+
+    async def list_residents_grouped_with_room(self) -> list[tuple[str, Resident]]:
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                """
+                SELECT rooms.room_number, residents.*
+                FROM residents
+                JOIN rooms ON residents.room_id = rooms.id
+                ORDER BY
+                    CAST(SUBSTR(rooms.room_number, 2) AS INTEGER),
+                    residents.last_name COLLATE NOCASE,
+                    residents.first_name COLLATE NOCASE
+                """
+            )
+            rows = await cur.fetchall()
+            result = []
+            for row in rows:
+                room_number = str(row["room_number"])
+                # Поле room_number в _row_to_resident игнорируется, так как его нет в датаклассе.
+                resident = _row_to_resident(row)
+                result.append((room_number, resident))
+            return result
 
     async def bind_telegram(self, resident_id: int, telegram_user_id: int) -> None:
         async with aiosqlite.connect(self.path) as db:
@@ -189,17 +259,27 @@ class Database:
                 resident_id=int(row["resident_id"]),
                 expires_at=int(row["expires_at"]),
             )
-
-
+            
+    async def seed_rooms_from_json(self, json_path: str) -> None:
+        with open(json_path) as f:
+            data = json.load(f)
+        async with aiosqlite.connect(self.path) as db:
+            for room in data["rooms"]:
+                await db.execute(
+                    "INSERT OR IGNORE INTO rooms (room_number, max_residents, created_at) VALUES (?, ?, ?)",
+                    (room["room_number"], room.get("max_residents"), int(time.time()))
+                )
+            await db.commit()
+            
 def _row_to_resident(row: aiosqlite.Row) -> Resident:
     return Resident(
         id=int(row["id"]),
         first_name=str(row["first_name"]),
         last_name=str(row["last_name"]),
-        room=str(row["room"]),
+        room_id=int(row["room_id"]),
         telegram_user_id=int(row["telegram_user_id"]) if row["telegram_user_id"] is not None else None,
         xui_email=str(row["xui_email"]),
-        xui_client_id=str(row["xui_client_id"]),
+        xui_uuid=str(row["xui_uuid"]),
         xui_sub_id=str(row["xui_sub_id"]),
         created_at=int(row["created_at"]),
     )
