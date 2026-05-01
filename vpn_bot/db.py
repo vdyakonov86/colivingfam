@@ -99,6 +99,12 @@ class Database:
             row = await cur.fetchone()
             return int(row[0]) if row else 0
 
+    async def count_residents_by_room_id(self, room_id: int) -> int:
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute("SELECT COUNT(*) FROM residents WHERE room_id = ?", (room_id,))
+            row = await cur.fetchone()
+            return int(row[0]) if row else 0
+
     async def add_resident(
         self,
         first_name: str,
@@ -109,9 +115,10 @@ class Database:
         xui_sub_id: str,
     ) -> int:
         room_number = normalize_room(room_number)
-        room_id = await self.get_room_id_by_room_number(room_number)
-        if room_id is None:
+        room = await self.get_room_by_room_number(room_number)
+        if room is None:
             raise ValueError("Комната не найдена")
+        room_id = room.id
 
         now = int(time.time())
         async with aiosqlite.connect(self.path) as db:
@@ -125,12 +132,14 @@ class Database:
             await db.commit()
             return int(cur.lastrowid)
 
-    async def get_room_id_by_room_number(self, room_number: str) -> int | None:
+    async def get_room_by_room_number(self, room_number: str) -> Room | None:
         async with aiosqlite.connect(self.path) as db:
             db.row_factory = aiosqlite.Row
-            cur = await db.execute("SELECT id FROM rooms WHERE room_number = ?", (room_number,))
+            cur = await db.execute("SELECT * FROM rooms WHERE room_number = ?", (room_number,))
             row = await cur.fetchone()
-            return int(row["id"]) if row else None
+            if not row:
+                return None
+            return _row_to_room(row)
 
     async def delete_resident(self, resident_id: int) -> None:
         async with aiosqlite.connect(self.path) as db:
@@ -282,4 +291,12 @@ def _row_to_resident(row: aiosqlite.Row) -> Resident:
         xui_uuid=str(row["xui_uuid"]),
         xui_sub_id=str(row["xui_sub_id"]),
         created_at=int(row["created_at"]),
+    )
+
+def _row_to_room(row: aiosqlite.Row) -> Room:
+    return Room(
+        id=int(row["id"]),
+        room_number=str(row["room_number"]),
+        max_residents=int(row["max_residents"]),
+        created_at=int(row["created_at"])
     )

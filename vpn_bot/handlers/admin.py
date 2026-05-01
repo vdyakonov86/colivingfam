@@ -121,7 +121,7 @@ def build_admin_router(settings: Settings, db: Database, xui: XuiClient) -> Rout
     @router.message(StateFilter(AddResidentStates.room), is_admin)
     async def add_room(message: Message, state: FSMContext) -> None:
         try:
-            room = normalize_room(message.text.strip())
+            room_number = normalize_room(message.text.strip())
         except ValueError as e:
             await message.answer(str(e))
             return
@@ -138,7 +138,23 @@ def build_admin_router(settings: Settings, db: Database, xui: XuiClient) -> Rout
             )
             return
 
-        email = make_client_email(room, last, first)
+        room = await db.get_room_by_room_number(room_number)
+        if room is None:
+            await state.clear()
+            await message.answer(f"Комнаты '{room_number}' не существует", reply_markup=admin_main_kb())
+            return
+        
+        room_residents_count = await db.count_residents_by_room_id(room.id)
+        max_residents = room.max_residents
+        if (room_residents_count + 1) > max_residents:
+            await state.clear()
+            await message.answer(
+                f"Не удалось привязать жителя к комнате '{room_number}'. К ней привязано макс. возможное количество жителей: {max_residents})", 
+                reply_markup=admin_main_kb()
+            )
+            return
+        
+        email = make_client_email(room_number, last, first)
         try:
             _, client_uuid, sub_id = await xui.add_vless_client(email, tg_id=0)
         except XuiApiError as e:
@@ -148,7 +164,7 @@ def build_admin_router(settings: Settings, db: Database, xui: XuiClient) -> Rout
             return
 
         try:
-            rid = await db.add_resident(first, last, room, email, client_uuid, sub_id)
+            rid = await db.add_resident(first, last, room_number, email, client_uuid, sub_id)
         except Exception:
             logger.exception("DB add failed; rolling back XUI client")
             try:
