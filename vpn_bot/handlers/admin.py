@@ -52,7 +52,7 @@ def build_admin_router(settings: Settings, db: Database, xui: XuiClient) -> Rout
 
             await db.bind_telegram(r.id, message.from_user.id)
             await message.answer(
-                f"Привязка выполнена: {html.escape(r.last_name)} {html.escape(r.first_name)}, {html.escape(room_number)}.\n"
+                f"Привязка выполнена: <b>{html.escape(r.first_name)}</b> ({html.escape(room_number)}).\n"
                 "Ниже меню для получения ссылки и QR.",
                 reply_markup=resident_menu_kb(),
             )
@@ -180,7 +180,7 @@ def build_admin_router(settings: Settings, db: Database, xui: XuiClient) -> Rout
 
         await state.clear()
         await message.answer(
-            f"Житель добавлен (id=<code>{rid}</code>, email=<code>{html.escape(email)}</code>).",
+            f"Житель <b>{html.escape(first)}</b> ({html.escape(room_number)}) добавлен",
             parse_mode="HTML",
             reply_markup=admin_main_kb(),
         )
@@ -202,7 +202,7 @@ def build_admin_router(settings: Settings, db: Database, xui: XuiClient) -> Rout
             await cq.answer()
             return
         rid = int(cq.data.split(":", 1)[1])
-        r = await db.get_resident_by_id(rid)
+        r, room_number = await db.get_resident_with_room_by_id(rid)
         if not r:
             await cq.answer("Запись не найдена", show_alert=True)
             return
@@ -214,7 +214,7 @@ def build_admin_router(settings: Settings, db: Database, xui: XuiClient) -> Rout
             await cq.answer()
             return
         await db.delete_resident(rid)
-        await cq.message.answer(f"Житель <code>{rid}</code> удалён.", parse_mode="HTML")
+        await cq.message.answer(f"Житель <b>{html.escape(r.first_name)}</b> ({html.escape(room_number)}) удалён.", parse_mode="HTML")
         await cq.answer()
 
     @router.message(F.text == "Код привязки", is_admin)
@@ -236,8 +236,11 @@ def build_admin_router(settings: Settings, db: Database, xui: XuiClient) -> Rout
             return
         rid = int(cq.data.split(":", 1)[1])
         r, room_number = await db.get_resident_with_room_by_id(rid)
-        if not r or r.telegram_user_id is not None:
-            await cq.answer("Недоступно", show_alert=True)
+        if not r:
+            await cq.answer("Пользователь не существует", show_alert=True)
+            return
+        if r.telegram_user_id is not None:
+            await cq.answer("Telegram пользователя уже привязан", show_alert=True)
             return
         code = secrets.token_urlsafe(8).replace("-", "")[:12].lower()
         expires = int(time.time()) + settings.link_code_ttl_minutes * 60
@@ -249,9 +252,7 @@ def build_admin_router(settings: Settings, db: Database, xui: XuiClient) -> Rout
         deep = f"https://t.me/{me.username}?start=link_{code}"
         await cq.message.edit_reply_markup(reply_markup=None)
         await cq.message.answer(
-            f"Код привязки для <b>{html.escape(r.first_name)}</b> ({html.escape(room_number)}):\n"
-            f"<code>{code}</code>\n\n"
-            f"Ссылка для жителя (действует ~{settings.link_code_ttl_minutes} мин):\n{deep}",
+            f"Ссылка для жителя <b>{html.escape(r.first_name)}</b> ({html.escape(room_number)}): (действует ~{settings.link_code_ttl_minutes} мин):\n{deep}",
             parse_mode="HTML",
         )
         await cq.answer()

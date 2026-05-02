@@ -49,7 +49,7 @@ def build_user_router(settings: Settings, db: Database, xui: XuiClient) -> Route
                 
             await db.bind_telegram(r.id, message.from_user.id)
             await message.answer(
-                f"Привязка выполнена: {html.escape(r.last_name)} {html.escape(r.first_name)}, {html.escape(room_number)}.\n"
+                f"Привязка выполнена: <b>{html.escape(r.first_name)}</b> ({html.escape(room_number)}).\n"
                 "Ниже меню для получения ссылки и QR.",
                 reply_markup=resident_menu_kb(),
             )
