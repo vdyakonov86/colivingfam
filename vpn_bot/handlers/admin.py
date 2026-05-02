@@ -124,12 +124,13 @@ def build_admin_router(settings: Settings, db: Database, xui: XuiClient) -> Rout
         try:
             room_number = normalize_room(message.text.strip())
         except ValueError as e:
-            await message.answer(str(e))
+            await state.clear()
+            await message.answer(str(e), reply_markup=admin_main_kb())
             return
+
         data = await state.get_data()
         first: str = data["first_name"]
-        # last: str = data["last_name"]
-        last = ""
+        last: str = data.get("last_name", "")
 
         count = await db.count_residents()
         if count >= settings.max_residents:
@@ -156,25 +157,25 @@ def build_admin_router(settings: Settings, db: Database, xui: XuiClient) -> Rout
             )
             return
         
-        email = make_client_email(room_number, last, first)
         try:
+            email = make_client_email(room_number, last, first)
             _, client_uuid, sub_id = await xui.add_vless_client(email, tg_id=0)
+            rid = await db.add_resident(first, last, room_number, email, client_uuid, sub_id)
         except XuiApiError as e:
             logger.exception("3x-ui add client failed")
+            await state.clear()
             await message.answer(f"Ошибка панели 3x-ui: {e}", reply_markup=admin_main_kb())
-            await state.clear()
             return
-
-        try:
-            rid = await db.add_resident(first, last, room_number, email, client_uuid, sub_id)
-        except Exception:
-            logger.exception("DB add failed; rolling back XUI client")
-            try:
-                await xui.delete_client(client_uuid)
-            except XuiApiError:
-                logger.exception("Rollback delete client failed")
+        except Exception as e:
+            logger.exception("Unexpected error during resident creation")
+            # Пытаемся откатить клиента в XUI, если он был создан
+            if 'client_uuid' in locals():
+                try:
+                    await xui.delete_client(client_uuid)
+                except XuiApiError:
+                    logger.exception("Rollback delete client failed")
             await state.clear()
-            await message.answer("Ошибка базы данных.", reply_markup=admin_main_kb())
+            await message.answer("Произошла внутренняя ошибка. Попробуйте позже.", reply_markup=admin_main_kb())
             return
 
         await state.clear()
