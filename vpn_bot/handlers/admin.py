@@ -109,14 +109,15 @@ def build_admin_router(settings: Settings, db: Database, xui: XuiClient) -> Rout
     @router.message(StateFilter(AddResidentStates.first_name), is_admin)
     async def add_first(message: Message, state: FSMContext) -> None:
         await state.update_data(first_name=message.text.strip())
-        await state.set_state(AddResidentStates.last_name)
-        await message.answer("Введите фамилию.", reply_markup=cancel_reply_kb())
-
-    @router.message(StateFilter(AddResidentStates.last_name), is_admin)
-    async def add_last(message: Message, state: FSMContext) -> None:
-        await state.update_data(last_name=message.text.strip())
         await state.set_state(AddResidentStates.room)
+        # await message.answer("Введите фамилию.", reply_markup=cancel_reply_kb())
         await message.answer("Выберите комнату (F1–F12).", reply_markup=rooms_reply_kb())
+
+    # @router.message(StateFilter(AddResidentStates.last_name), is_admin)
+    # async def add_last(message: Message, state: FSMContext) -> None:
+    #     await state.update_data(last_name=message.text.strip())
+    #     await state.set_state(AddResidentStates.room)
+    #     await message.answer("Выберите комнату (F1–F12).", reply_markup=rooms_reply_kb())
 
     @router.message(StateFilter(AddResidentStates.room), is_admin)
     async def add_room(message: Message, state: FSMContext) -> None:
@@ -127,7 +128,8 @@ def build_admin_router(settings: Settings, db: Database, xui: XuiClient) -> Rout
             return
         data = await state.get_data()
         first: str = data["first_name"]
-        last: str = data["last_name"]
+        # last: str = data["last_name"]
+        last = ""
 
         count = await db.count_residents()
         if count >= settings.max_residents:
@@ -246,7 +248,7 @@ def build_admin_router(settings: Settings, db: Database, xui: XuiClient) -> Rout
         deep = f"https://t.me/{me.username}?start=link_{code}"
         await cq.message.edit_reply_markup(reply_markup=None)
         await cq.message.answer(
-            f"Код привязки для <b>{html.escape(r.last_name)} {html.escape(r.first_name)}</b> ({html.escape(room_number)}):\n"
+            f"Код привязки для <b>{html.escape(r.first_name)}</b> ({html.escape(room_number)}):\n"
             f"<code>{code}</code>\n\n"
             f"Ссылка для жителя (действует ~{settings.link_code_ttl_minutes} мин):\n{deep}",
             parse_mode="HTML",
