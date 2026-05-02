@@ -5,14 +5,13 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 from vpn_bot.db import Resident
 
 
-def rooms_reply_kb() -> ReplyKeyboardMarkup:
-    b = ReplyKeyboardBuilder()
-    for i in range(1, 13):
-        b.add(KeyboardButton(text=f"F{i}"))
-    b.adjust(4, 4, 4)
-    b.row(KeyboardButton(text="Отмена"))
-    return b.as_markup(resize_keyboard=True)
-
+def rooms_reply_kb(room_numbers: list[str]) -> ReplyKeyboardMarkup:
+    builder = ReplyKeyboardBuilder()
+    for rn in room_numbers:
+        builder.add(KeyboardButton(text=rn))
+    builder.adjust(4, 4, 4)
+    builder.row(KeyboardButton(text="Отмена"))
+    return builder.as_markup(resize_keyboard=True)
 
 def admin_main_kb() -> ReplyKeyboardMarkup:
     b = ReplyKeyboardBuilder()
@@ -42,7 +41,7 @@ def cancel_reply_kb() -> ReplyKeyboardMarkup:
 def residents_pick_inline(residents: list[tuple[str, Resident]], *, prefix: str) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     for (room_number, r) in residents:
-        label = f"{room_number} — {r.last_name} {r.first_name}"
+        label = f"{room_number} — {r.first_name}"
         b.add(InlineKeyboardButton(text=label[:64], callback_data=f"{prefix}:{r.id}"))
     b.adjust(1)
     return b.as_markup()

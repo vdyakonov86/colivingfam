@@ -87,8 +87,9 @@ def build_admin_router(settings: Settings, db: Database, xui: XuiClient) -> Rout
     async def add_first(message: Message, state: FSMContext) -> None:
         await state.update_data(first_name=message.text.strip())
         await state.set_state(AddResidentStates.room)
+        rooms = await db.get_all_room_numbers()
         # await message.answer("Введите фамилию.", reply_markup=cancel_reply_kb())
-        await message.answer("Выберите комнату (F1–F12).", reply_markup=rooms_reply_kb())
+        await message.answer("Выберите комнату.", reply_markup=rooms_reply_kb(rooms))
 
     # @router.message(StateFilter(AddResidentStates.last_name), is_admin)
     # async def add_last(message: Message, state: FSMContext) -> None:

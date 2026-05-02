@@ -60,14 +60,14 @@ class Database:
             await db.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS rooms (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    id INTEGER PRIMARY KEY,
                     room_number TEXT UNIQUE NOT NULL,  
                     max_residents INTEGER NOT NULL,  
                     created_at INTEGER NOT NULL
                 );
 
                 CREATE TABLE IF NOT EXISTS residents (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    id INTEGER PRIMARY KEY,
                     first_name TEXT NOT NULL,
                     last_name TEXT NOT NULL,
                     room_id INTEGER NOT NULL,
@@ -140,6 +140,14 @@ class Database:
             if not row:
                 return None
             return _row_to_room(row)
+
+    async def get_all_room_numbers(self) -> list[str]:
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute("SELECT room_number FROM rooms")
+            rows = await cur.fetchall()
+            rooms = [row[0] for row in rows]
+            rooms.sort(key=lambda x: int(x[1:]))
+            return rooms
 
     async def delete_resident(self, resident_id: int) -> None:
         async with aiosqlite.connect(self.path) as db:
@@ -274,10 +282,25 @@ class Database:
             data = json.load(f)
         async with aiosqlite.connect(self.path) as db:
             for room in data["rooms"]:
-                await db.execute(
-                    "INSERT OR IGNORE INTO rooms (room_number, max_residents, created_at) VALUES (?, ?, ?)",
-                    (room["room_number"], room.get("max_residents"), int(time.time()))
-                )
+                room_number = room["room_number"]
+                max_residents = room.get("max_residents")
+                if max_residents is None:
+                    continue
+                # Проверяем, существует ли комната
+                cur = await db.execute("SELECT id FROM rooms WHERE room_number = ?", (room_number,))
+                row = await cur.fetchone()
+                if row:
+                    # Обновляем существующую
+                    await db.execute(
+                        "UPDATE rooms SET max_residents = ?, created_at = ? WHERE room_number = ?",
+                        (max_residents, int(time.time()), room_number)
+                    )
+                else:
+                    # Вставляем новую
+                    await db.execute(
+                        "INSERT INTO rooms (room_number, max_residents, created_at) VALUES (?, ?, ?)",
+                        (room_number, max_residents, int(time.time()))
+                    )
             await db.commit()
             
 def _row_to_resident(row: aiosqlite.Row) -> Resident:
