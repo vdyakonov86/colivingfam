@@ -22,6 +22,8 @@ def _rand_sub_id(length: int = 16) -> str:
     alphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
     return "".join(secrets.choice(alphabet) for _ in range(length))
 
+def _gb_to_bytes(gb: int) -> int:
+    return gb*pow(2, 30)
 
 class XuiClient:
     """Minimal 3x-ui panel client (session cookie, VLESS add/del client)."""
@@ -107,7 +109,7 @@ class XuiClient:
             "email": email,
             "flow": "",
             "limitIp": limit_ip,
-            "totalGB": total_gb,
+            "totalGB": _gb_to_bytes(total_gb),
             "expiryTime": 0,
             "enable": True,
             "tgId": tg_id,
