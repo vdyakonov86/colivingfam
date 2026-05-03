@@ -25,6 +25,9 @@ def _rand_sub_id(length: int = 16) -> str:
 def _gb_to_bytes(gb: int) -> int:
     return gb*pow(2, 30)
 
+def _bytes_to_gb(bytes: int) -> float:
+    return round(bytes / pow(2, 30), 2)
+
 class XuiClient:
     """Minimal 3x-ui panel client (session cookie, VLESS add/del client)."""
 
@@ -155,3 +158,22 @@ class XuiClient:
             raise XuiApiError(f"delClient non-JSON: {text[:500]}")
         if not data.get("success", False):
             raise XuiApiError(data.get("msg", data))
+
+    async def get_remain_traffic(self, client_email: str) -> float | None:
+        """Возвращает остаток трафика в Гб или None, если лимита нет."""
+        client = await self._ensure_client()
+        resp = await client.get(f"/panel/api/inbounds/getClientTraffics/{client_email}")
+        obj = resp.json().get("obj", {})
+
+        if obj.get("total", 0) == 0:
+            return None # безлимит
+
+        up = obj.get("up", 0)
+        down = obj.get("down", 0)
+        total = obj.get("total", 0)
+
+        used = up + down
+        remain = max(total - used, 0) # защита от отрицательного остатка
+
+        remain_gb = _bytes_to_gb(remain)
+        return remain_gb  

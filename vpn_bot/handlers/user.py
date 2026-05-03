@@ -76,4 +76,23 @@ def build_user_router(settings: Settings, db: Database, xui: XuiClient) -> Route
         )
         await cq.answer()
 
+    @router.callback_query(F.data == "resident:remain_traffic")
+    async def cb_remain_traffic(cq: CallbackQuery) -> None:
+        if cq.from_user is None or cq.message is None:
+            await cq.answer()
+            return
+        r = await db.get_resident_by_telegram(cq.from_user.id)
+        if not r:
+            await cq.answer("Нет привязки", show_alert=True)
+            return
+        
+        total = settings.xui_total_gb
+        remain = await xui.get_remain_traffic(r.xui_email)
+
+        if remain is None:
+            await cq.message.answer("у вас безлимитный трафик")
+        else:
+            await cq.message.answer(f"Остаток трафика: {remain} из {total} Гб")
+        await cq.answer()
+
     return router

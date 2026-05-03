@@ -27,6 +27,7 @@ def resident_menu_kb() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.add(InlineKeyboardButton(text="Ссылка подписки", callback_data="resident:sub"))
     b.add(InlineKeyboardButton(text="QR подписки", callback_data="resident:qr"))
+    b.add(InlineKeyboardButton(text="Остаток трафика", callback_data="resident:remain_traffic"))
     b.adjust(1)
     return b.as_markup()
 
