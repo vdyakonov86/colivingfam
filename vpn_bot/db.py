@@ -311,6 +311,28 @@ class Database:
                         (room_number, max_residents, int(time.time()))
                     )
             await db.commit()
+
+    async def get_residents_for_reset(self, traffic_reset_period: int) -> list[Resident]:
+        """Возвращает жителей, у которых now - last_reset_at >= traffic_reset_period."""
+        now = int(time.time())
+        traffic_reset_period_sec = _days_to_seconds(traffic_reset_period)
+        threshold = now - traffic_reset_period_sec
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT * FROM residents WHERE last_reset_at <= ?",
+                (threshold,)
+            )
+            rows = await cur.fetchall()
+            return [_row_to_resident(r) for r in rows]
+
+    async def update_last_reset_time(self, resident_id: int, new_time: int) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "UPDATE residents SET last_reset_at = ? WHERE id = ?",
+                (new_time, resident_id)
+            )
+            await db.commit()
             
 def _row_to_resident(row: aiosqlite.Row) -> Resident:
     return Resident(
@@ -333,3 +355,12 @@ def _row_to_room(row: aiosqlite.Row) -> Room:
         max_residents=int(row["max_residents"]),
         created_at=int(row["created_at"])
     )
+
+def _days_to_seconds(days: int) -> int:
+    """
+    Преобразует количество дней в количество секунд (Unix timestamp offset).
+    Используется для задания периода сброса трафика.
+    
+    Пример: 30 дней -> 2 592 000 секунд.
+    """
+    return days * 24 * 3600 

@@ -4,10 +4,10 @@ import json
 import logging
 import secrets
 import uuid
+import httpx
+from threading import Timer
 from typing import Any
 from urllib.parse import urljoin
-
-import httpx
 
 from vpn_bot.config import Settings
 
@@ -23,7 +23,7 @@ def _rand_sub_id(length: int = 16) -> str:
     return "".join(secrets.choice(alphabet) for _ in range(length))
 
 def _gb_to_bytes(gb: int) -> int:
-    return gb*pow(2, 30)
+    return int(gb*pow(2, 30))
 
 def _bytes_to_gb(bytes: int) -> float:
     return round(bytes / pow(2, 30), 2)
@@ -140,25 +140,11 @@ class XuiClient:
             raise XuiApiError(data.get("msg", data))
         return email, client_uuid, sub_id
 
-    async def delete_client(self, client_uuid: str) -> None:
+    async def delete_client(self, client_uuid: str) -> bool:
         path = f"/panel/api/inbounds/{self._s.xui_inbound_id}/delClient/{client_uuid}"
-        client = await self._ensure_client()
-        resp = await client.post(path)
-        if resp.status_code in (401, 404):
-            await self.login()
-            resp = await client.post(path)
-        text = resp.text.strip()
-        if not text:
-            if resp.status_code < 400:
-                return
-            raise XuiApiError(f"delClient empty body HTTP {resp.status_code}")
-        try:
-            data = json.loads(text)
-        except json.JSONDecodeError:
-            raise XuiApiError(f"delClient non-JSON: {text[:500]}")
-        if not data.get("success", False):
-            raise XuiApiError(data.get("msg", data))
-
+        data = await self._post_json(path, {})
+        return data.get("success", False)
+        
     async def get_remain_traffic(self, client_email: str) -> float | None:
         """Возвращает остаток трафика в Гб или None, если лимита нет."""
         client = await self._ensure_client()
@@ -177,3 +163,8 @@ class XuiClient:
 
         remain_gb = _bytes_to_gb(remain)
         return remain_gb  
+
+    async def reset_client_traffic(self, client_email: str) -> bool:
+        path = f"/panel/api/inbounds/{self._s.xui_inbound_id}/resetClientTraffic/{client_email}"
+        data = await self._post_json(path, {})
+        return data.get("success", False)
