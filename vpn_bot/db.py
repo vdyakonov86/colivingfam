@@ -13,7 +13,7 @@ ROOM_RE = re.compile(r"^F(1[0-2]|[1-9])$", re.IGNORECASE)
 def normalize_room(room: str) -> str:
     r = room.strip().upper()
     if not ROOM_RE.match(r):
-        raise ValueError("Комната должна быть F1–F12")
+        raise ValueError("Комната должна быть формата FN, где N - номер комнаты")
     return r
 
 
@@ -28,7 +28,7 @@ class Resident:
     xui_uuid: str
     xui_sub_id: str
     created_at: int
-
+    last_reset_at: int
 
 @dataclass
 class Room:
@@ -76,6 +76,7 @@ class Database:
                     xui_uuid TEXT NOT NULL UNIQUE,
                     xui_sub_id TEXT NOT NULL,
                     created_at INTEGER NOT NULL,
+                    last_reset_at INTEGER NOT NULL,
                     FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE RESTRICT
                 );
 
@@ -90,6 +91,14 @@ class Database:
                 """
             )
             await db.commit()
+            
+            cur = await db.execute("PRAGMA table_info(residents)")
+            columns = [row[1] for row in await cur.fetchall()]  # второе поле — имя колонки
+            if "last_reset_at" not in columns:
+                await db.execute("ALTER TABLE residents ADD COLUMN last_reset_at INTEGER DEFAULT 0")
+                # Для старых записей можно обновить на created_at
+                await db.execute("UPDATE residents SET last_reset_at = created_at WHERE last_reset_at = 0")
+                await db.commit()
 
         await self.seed_rooms_from_json(self.seed_rooms_path)
 
@@ -124,10 +133,10 @@ class Database:
         async with aiosqlite.connect(self.path) as db:
             cur = await db.execute(
                 """
-                INSERT INTO residents (first_name, last_name, room_id, telegram_user_id, xui_email, xui_uuid, xui_sub_id, created_at)
-                VALUES (?, ?, ?, NULL, ?, ?, ?, ?)
+                INSERT INTO residents (first_name, last_name, room_id, telegram_user_id, xui_email, xui_uuid, xui_sub_id, created_at, last_reset_at)
+                VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?)
                 """,
-                (first_name.strip(), last_name.strip(), room_id, xui_email, xui_uuid, xui_sub_id, now),
+                (first_name.strip(), last_name.strip(), room_id, xui_email, xui_uuid, xui_sub_id, now, now),
             )
             await db.commit()
             return int(cur.lastrowid)
@@ -314,6 +323,7 @@ def _row_to_resident(row: aiosqlite.Row) -> Resident:
         xui_uuid=str(row["xui_uuid"]),
         xui_sub_id=str(row["xui_sub_id"]),
         created_at=int(row["created_at"]),
+        last_reset_at=int(row["last_reset_at"])
     )
 
 def _row_to_room(row: aiosqlite.Row) -> Room:
