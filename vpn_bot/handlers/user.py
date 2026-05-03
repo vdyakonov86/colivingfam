@@ -95,4 +95,32 @@ def build_user_router(settings: Settings, db: Database, xui: XuiClient) -> Route
             await cq.message.answer(f"Остаток трафика: {remain} из {total} Гб")
         await cq.answer()
 
+    @router.callback_query(F.data == "resident:supported_apps")
+    async def cb_supported_apps(cq: CallbackQuery) -> None:
+        if cq.from_user is None or cq.message is None:
+            await cq.answer()
+            return
+        r = await db.get_resident_by_telegram(cq.from_user.id)
+        if not r:
+            await cq.answer("Нет привязки", show_alert=True)
+            return
+        
+        # Формируем сообщение со ссылками на приложения
+        text = (
+            "📱 <b>Рекомендуемые приложения для подключения</b>\n\n"
+            "🤖 <b>Android:</b>\n"
+            "v2rayNG — скачать APK:\n"
+            "https://github.com/2dust/v2rayNG/releases/download/2.0.18/v2rayNG_2.0.18-fdroid_arm64-v8a.apk\n\n"
+            "🍏 <b>iOS (iPhone/iPad):</b>\n"
+            "Streisand — установить из App Store:\n"
+            "https://apps.apple.com/us/app/streisand/id6450534064\n\n"
+            "💡 <b>Как подключиться:</b>\n"
+            "1. Установите приложение\n"
+            "2. Импортируйте конфигурацию (QR-код или ссылка подписки)\n"
+            "3. Включите VPN"
+        )
+        
+        await cq.message.answer(text, parse_mode="HTML", disable_web_page_preview=True)
+        await cq.answer()
+
     return router
