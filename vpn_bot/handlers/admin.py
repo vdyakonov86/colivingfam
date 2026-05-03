@@ -35,8 +35,13 @@ def build_admin_router(settings: Settings, db: Database, xui: XuiClient) -> Rout
             await handle_bind_link(message, db, code)
             return
         else:
+            admin_name = message.from_user.full_name if message.from_user else "Администратор"
             await message.answer(
-                "Админ-панель бота коливинга. Выберите действие кнопками ниже.",
+                f"👋 Здравствуйте, {html.escape(admin_name)}!\n\n"
+                "🛠 <b>Панель управления коливингом</b>\n"
+                "Здесь вы можете управлять жильцами и их ключами.\n\n"
+                "Выберите действие с помощью кнопок ниже.",
+                parse_mode="HTML",
                 reply_markup=admin_main_kb(),
             )
 
@@ -62,19 +67,22 @@ def build_admin_router(settings: Settings, db: Database, xui: XuiClient) -> Rout
             "или отправьте команду из приглашения.",
         )
 
-    @router.message(F.text == "Список жителей", is_admin)
+    @router.message(F.text == "📋 Список жителей", is_admin)
     async def list_residents(message: Message) -> None:
         residents = await db.list_residents_grouped_with_room()
+        if not residents:
+            await message.answer("📭 Список жителей пуст.")
+            return
         text = format_residents_list(residents)
         # Telegram message limit ~4096
         chunk = 3800
         for i in range(0, len(text), chunk):
             await message.answer(text[i : i + chunk], parse_mode="HTML")
 
-    @router.message(F.text == "Добавить жителя", is_admin)
+    @router.message(F.text == "➕ Добавить жителя", is_admin)
     async def add_begin(message: Message, state: FSMContext) -> None:
         await state.set_state(AddResidentStates.first_name)
-        await message.answer("Введите имя жителя.", reply_markup=cancel_reply_kb())
+        await message.answer("Введите имя жителя:", reply_markup=cancel_reply_kb())
 
     @router.message(StateFilter(AddResidentStates.first_name), F.text == "Отмена", is_admin)
     @router.message(StateFilter(AddResidentStates.last_name), F.text == "Отмена", is_admin)
@@ -85,12 +93,18 @@ def build_admin_router(settings: Settings, db: Database, xui: XuiClient) -> Rout
 
     @router.message(StateFilter(AddResidentStates.first_name), is_admin)
     async def add_first(message: Message, state: FSMContext) -> None:
-        await state.update_data(first_name=message.text.strip())
+        name = message.text.strip()
+        if not name:
+            await message.answer("❌ Имя не может быть пустым. Попробуйте ещё раз.")
+            return
+        await state.update_data(first_name=name)
         await state.set_state(AddResidentStates.room)
         rooms = await db.get_all_room_numbers()
         # await message.answer("Введите фамилию.", reply_markup=cancel_reply_kb())
-        await message.answer("Выберите комнату.", reply_markup=rooms_reply_kb(rooms))
-
+        await message.answer(
+            "🏠 Выберите комнату для жителя:",
+            reply_markup=rooms_reply_kb(rooms)
+        )
     # @router.message(StateFilter(AddResidentStates.last_name), is_admin)
     # async def add_last(message: Message, state: FSMContext) -> None:
     #     await state.update_data(last_name=message.text.strip())
@@ -163,7 +177,7 @@ def build_admin_router(settings: Settings, db: Database, xui: XuiClient) -> Rout
             reply_markup=admin_main_kb(),
         )
 
-    @router.message(F.text == "Удалить жителя", is_admin)
+    @router.message(F.text == "❌ Удалить жителя", is_admin)
     async def del_pick(message: Message) -> None:
         residents = await db.list_residents_grouped_with_room()
         if not residents:
@@ -188,14 +202,18 @@ def build_admin_router(settings: Settings, db: Database, xui: XuiClient) -> Rout
         try:
             await xui.delete_client(r.xui_uuid)
         except XuiApiError as e:
-            await cq.message.answer(f"Ошибка удаления в панели: {e}")
+            await cq.message.answer(f"⚠️ Ошибка удаления в панели: {e}")
             await cq.answer()
             return
         await db.delete_resident(rid)
-        await cq.message.answer(f"Житель <b>{html.escape(r.first_name)}</b> ({html.escape(room_number)}) удалён.", parse_mode="HTML")
+        await cq.message.answer(
+            f"🗑 Житель <b>{html.escape(r.first_name)} {html.escape(r.last_name)}</b> из комнаты {html.escape(room_number)} удалён.\n"
+            f"Ключ VPN отозван.",
+            parse_mode="HTML"
+        )
         await cq.answer()
 
-    @router.message(F.text == "Код привязки", is_admin)
+    @router.message(F.text == "🔗 Код привязки", is_admin)
     async def link_pick(message: Message) -> None:
         residents = await db.list_residents_grouped_with_room()
         unlinked = [(room_number, r) for (room_number, r) in residents if r.telegram_user_id is None]
@@ -230,7 +248,10 @@ def build_admin_router(settings: Settings, db: Database, xui: XuiClient) -> Rout
         deep = f"https://t.me/{me.username}?start=link_{code}"
         await cq.message.edit_reply_markup(reply_markup=None)
         await cq.message.answer(
-            f"Ссылка для жителя <b>{html.escape(r.first_name)}</b> ({html.escape(room_number)}): (действует ~{settings.link_code_ttl_minutes} мин):\n{deep}",
+            f"🔗 <b>Код привязки для жителя {html.escape(r.first_name)} {html.escape(r.last_name)}</b> ({html.escape(room_number)})\n\n"
+            f"⏱ Действует: {settings.link_code_ttl_minutes} мин.\n\n"
+            f"🔹 <b>Отправьте жителю ссылку для привязки Telegram:</b>\n{deep}\n\n"
+            f"👉 После перехода по ссылке житель получит доступ к меню VPN.",
             parse_mode="HTML",
         )
         await cq.answer()

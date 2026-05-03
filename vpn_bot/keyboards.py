@@ -15,20 +15,20 @@ def rooms_reply_kb(room_numbers: list[str]) -> ReplyKeyboardMarkup:
 
 def admin_main_kb() -> ReplyKeyboardMarkup:
     b = ReplyKeyboardBuilder()
-    b.add(KeyboardButton(text="Список жителей"))
-    b.add(KeyboardButton(text="Добавить жителя"))
-    b.add(KeyboardButton(text="Удалить жителя"))
-    b.add(KeyboardButton(text="Код привязки"))
+    b.add(KeyboardButton(text="📋 Список жителей"))
+    b.add(KeyboardButton(text="➕ Добавить жителя"))
+    b.add(KeyboardButton(text="❌ Удалить жителя"))
+    b.add(KeyboardButton(text="🔗 Код привязки"))
     b.adjust(2)
     return b.as_markup(resize_keyboard=True)
 
 
 def resident_menu_kb() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.add(InlineKeyboardButton(text="Ссылка подписки", callback_data="resident:sub"))
-    b.add(InlineKeyboardButton(text="QR подписки", callback_data="resident:qr"))
-    b.add(InlineKeyboardButton(text="Остаток трафика", callback_data="resident:remain_traffic"))
-    b.add(InlineKeyboardButton(text="📱 Приложения (Android/iOS)", callback_data="resident:supported_apps"))
+    b.add(InlineKeyboardButton(text="🔗 Ссылка подписки", callback_data="resident:sub"))
+    b.add(InlineKeyboardButton(text="📱 QR подписки", callback_data="resident:qr"))
+    b.add(InlineKeyboardButton(text="📊 Остаток трафика", callback_data="resident:remain_traffic"))
+    b.add(InlineKeyboardButton(text="📲 Приложения (Android/iOS)", callback_data="resident:supported_apps"))
     b.adjust(1)
     return b.as_markup()
 

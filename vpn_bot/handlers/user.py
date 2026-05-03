@@ -53,7 +53,15 @@ def build_user_router(settings: Settings, db: Database, xui: XuiClient) -> Route
             await cq.answer("Нет привязки", show_alert=True)
             return
         url = xui.subscription_url(r.xui_sub_id)
-        await cq.message.answer(f"Ссылка подписки:\n<code>{url}</code>", parse_mode="HTML")
+        instructions = (
+            "🔗 <b>Ссылка подписки</b>\n\n"
+            "Скопируйте её и добавьте в клиент (v2rayNG / Streisand):\n"
+            "• Кликните на плюсик ➕\n"
+            "• Выберите «Импорт из буфера» или «Subscription»\n"
+            "• Вставьте ссылку и сохраните\n\n"
+            f"<code>{url}</code>"
+        )
+        await cq.message.answer(instructions, parse_mode="HTML", disable_web_page_preview=True)
         await cq.answer()
 
     @router.callback_query(F.data == "resident:qr")
@@ -70,9 +78,17 @@ def build_user_router(settings: Settings, db: Database, xui: XuiClient) -> Route
         buf = io.BytesIO()
         img.save(buf, format="PNG")
         buf.seek(0)
+        caption = (
+            "📱 <b>QR-код подписки</b>\n\n"
+            "Отсканируйте его в клиенте (v2rayNG / Streisand):\n"
+            "• Нажмите на плюсик ➕\n"
+            "• Выберите «Импорт из QR-кода»\n"
+            "• Наведите камеру на экран"
+        )
         await cq.message.answer_photo(
             BufferedInputFile(buf.read(), filename="sub.png"),
-            caption="QR для подписки (добавьте в клиент).",
+            caption=caption,
+            parse_mode="HTML"
         )
         await cq.answer()
 
@@ -85,14 +101,23 @@ def build_user_router(settings: Settings, db: Database, xui: XuiClient) -> Route
         if not r:
             await cq.answer("Нет привязки", show_alert=True)
             return
-        
-        total = settings.xui_total_gb
-        remain = await xui.get_remain_traffic(r.xui_email)
 
-        if remain is None:
-            await cq.message.answer("у вас безлимитный трафик")
+        total_gb = settings.xui_total_gb
+        remain_bytes = await xui.get_remain_traffic(r.xui_email)
+
+        if remain_bytes is None:
+            await cq.message.answer("📊 <b>Тариф безлимитный</b>\n\nВы можете пользоваться VPN без ограничений.", parse_mode="HTML")
         else:
-            await cq.message.answer(f"Остаток трафика: {remain} из {total} Гб")
+            remain_gb = round(remain_bytes, 2)
+            used_gb = round(total_gb - remain_gb, 2)
+            percent = (used_gb / total_gb) * 100 if total_gb > 0 else 0
+
+            text = (
+                f"📊 <b>Остаток трафика</b>\n\n"
+                f"Использовано: {used_gb} / {total_gb} ГБ ({percent:.1f}%)\n\n"
+                f"✅ <b>Доступно:</b> {remain_gb} ГБ"
+            )
+            await cq.message.answer(text, parse_mode="HTML")
         await cq.answer()
 
     @router.callback_query(F.data == "resident:supported_apps")
