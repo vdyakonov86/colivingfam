@@ -9,3 +9,6 @@ class AddResidentStates(StatesGroup):
 class SendAccessRequestStates(StatesGroup):
     name = State()
     room = State()
+
+class ProcessAccessRequestStates(StatesGroup):
+    choosing_room = State()  # Для выбора комнаты при добавлении

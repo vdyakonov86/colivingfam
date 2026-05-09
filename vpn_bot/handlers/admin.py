@@ -13,9 +13,9 @@ from aiogram.types import CallbackQuery, Message
 from vpn_bot.config import Settings
 from vpn_bot.db import Database, normalize_room
 from vpn_bot.filters import IsAdmin
-from vpn_bot.keyboards import admin_main_kb, cancel_reply_kb, residents_pick_inline, rooms_reply_kb, resident_menu_kb, resident_access_request_kb
+from vpn_bot.keyboards import admin_main_kb, cancel_reply_kb, residents_pick_inline, rooms_reply_kb, resident_menu_kb, resident_access_request_kb, access_requests_list_kb, access_request_action_kb
 from vpn_bot.slug import make_client_email
-from vpn_bot.states import AddResidentStates
+from vpn_bot.states import AddResidentStates, ProcessAccessRequestStates
 from vpn_bot.texts import format_residents_list
 from vpn_bot.xui_client import XuiApiError, XuiClient
 from vpn_bot.handlers.common import handle_bind_link, register_access_request_handlers
@@ -234,6 +234,214 @@ def build_admin_router(settings: Settings, db: Database, xui: XuiClient) -> Rout
             parse_mode="HTML",
         )
         await cq.answer()
+
+    @router.message(F.text == "👥 Запросы доступа", is_admin)
+    async def list_access_requests(message: Message) -> None:
+        requests = await db.get_access_requests()
+        count = len(requests)
+        if count == 0:
+            await message.answer("📭 Список ожидающих пуст.")
+            return
+        
+        await message.answer(
+            f"👥 <b>Список ожидающих: {count}</b>\n\n"
+            "Выберите человека для обработки:",
+            reply_markup=access_requests_list_kb(requests),
+            parse_mode="HTML"
+        )
+    
+    @router.callback_query(F.data.startswith("access_req:"), is_admin)
+    async def show_access_request(cq: CallbackQuery) -> None:
+        if cq.message is None:
+            await cq.answer()
+            return
+        
+        request_id = int(cq.data.split(":")[1])
+        req = await db.get_access_request_by_id(request_id)
+        
+        if not req:
+            await cq.answer("Запрос не найден", show_alert=True)
+            return
+        
+        # Форматируем дату
+        from datetime import datetime
+        request_date = datetime.fromtimestamp(req.requested_at).strftime("%d.%m.%Y %H:%M")
+        
+        text = (
+            f"👤 <b>Запрос доступа</b>\n\n"
+            f"Имя: <b>{html.escape(req.name)}</b>\n"
+            f"Комната: <b>{html.escape(req.room_number)}</b>\n"
+            f"Дата запроса: {request_date}\n"
+            f"Telegram ID: <code>{req.telegram_user_id}</code>\n"
+        )
+        
+        if req.telegram_username:
+            text += f"Username: @{html.escape(req.telegram_username)}\n"
+        else:
+            text += "Username: <i>не указан</i>\n"
+        
+        text += "\nВыберите действие:"
+        
+        await cq.message.edit_text(
+            text,
+            reply_markup=access_request_action_kb(req.id, req.telegram_username),
+            parse_mode="HTML"
+        )
+        await cq.answer()
+
+    @router.callback_query(F.data.startswith("access_action:add:"), is_admin)
+    async def start_add_resident_from_request(cq: CallbackQuery, state: FSMContext) -> None:
+        if cq.message is None:
+            await cq.answer()
+            return
+        
+        request_id = int(cq.data.split(":")[2])
+        req = await db.get_access_request_by_id(request_id)
+        
+        if not req:
+            await cq.answer("Запрос не найден", show_alert=True)
+            return
+        
+        # Сохраняем данные запроса в состоянии
+        await state.update_data(
+            request_id=request_id,
+            name=req.name,
+            room_number=req.room_number,
+            telegram_user_id=req.telegram_user_id
+        )
+        await state.set_state(ProcessAccessRequestStates.choosing_room)
+        
+        rooms = await db.get_all_room_numbers()
+        await cq.message.answer(
+            f"👤 <b>{html.escape(req.name)}</b> указал комнату <b>{html.escape(req.room_number)}</b>\n\n"
+            "Вы можете подтвердить эту комнату или выбрать другую:",
+            reply_markup=rooms_reply_kb(rooms),
+            parse_mode="HTML"
+        )
+        await cq.answer()
+    
+    @router.message(ProcessAccessRequestStates.choosing_room, F.text == "Отмена", is_admin)
+    async def cancel_add_from_request(message: Message, state: FSMContext) -> None:
+        await state.clear()
+        await message.answer("Добавление отменено.", reply_markup=admin_main_kb())
+    
+    @router.message(ProcessAccessRequestStates.choosing_room, is_admin)
+    async def add_resident_from_request(message: Message, state: FSMContext) -> None:
+        try:
+            room_number = normalize_room(message.text.strip())
+        except ValueError as e:
+            await message.answer(str(e), reply_markup=cancel_reply_kb())
+            return
+        
+        data = await state.get_data()
+        name = data["name"]
+        request_id = data["request_id"]
+        telegram_user_id = data["telegram_user_id"]
+        
+        room = await db.get_room_by_room_number(room_number)
+        if room is None:
+            await message.answer(
+                f"Комнаты '{room_number}' не существует",
+                reply_markup=cancel_reply_kb()
+            )
+            return
+        
+        room_residents_count = await db.count_residents_by_room_id(room.id)
+        if room_residents_count >= room.max_residents:
+            await message.answer(
+                f"❌ Комната {room_number} заполнена (макс. {room.max_residents} чел.)",
+                reply_markup=cancel_reply_kb()
+            )
+            return
+        
+        try:
+            email = make_client_email(room_number, "", name)
+            _, client_uuid, sub_id = await xui.add_vless_client(email, tg_id=telegram_user_id)
+            rid = await db.add_resident(name, "", room_number, email, client_uuid, sub_id)
+            
+            # Привязываем Telegram сразу
+            await db.bind_telegram(rid, telegram_user_id)
+            
+            # Удаляем запрос доступа
+            await db.delete_access_request(request_id)
+            
+        except XuiApiError as e:
+            logger.exception("3x-ui add client failed")
+            await message.answer(f"Ошибка панели 3x-ui: {e}", reply_markup=admin_main_kb())
+            await state.clear()
+            return
+        except Exception as e:
+            logger.exception("Unexpected error during resident creation")
+            await message.answer("Произошла внутренняя ошибка.", reply_markup=admin_main_kb())
+            await state.clear()
+            return
+        
+        await state.clear()
+        
+        # Уведомляем пользователя
+        try:
+            await message.bot.send_message(
+                telegram_user_id,
+                "✅ Ваш запрос доступа одобрен!\n",
+                parse_mode="HTML",
+                reply_markup=resident_menu_kb()
+            )
+        except Exception:
+            logger.warning(f"Failed to notify user {telegram_user_id}")
+        
+        await message.answer(
+            f"✅ Пользователь <b>{html.escape(name)}</b> добавлен",
+            parse_mode="HTML",
+            reply_markup=admin_main_kb()
+        )
+
+    @router.callback_query(F.data.startswith("access_action:reject:"), is_admin)
+    async def reject_access_request(cq: CallbackQuery) -> None:
+        if cq.message is None:
+            await cq.answer()
+            return
+        
+        request_id = int(cq.data.split(":")[2])
+        req = await db.get_access_request_by_id(request_id)
+        
+        if not req:
+            await cq.answer("Запрос не найден", show_alert=True)
+            return
+        
+        # Удаляем запрос
+        await db.delete_access_request(request_id)
+        
+        # Уведомляем пользователя
+        try:
+            await cq.bot.send_message(
+                req.telegram_user_id,
+                "❌ Ваш запрос доступа был отклонён администратором.\n"
+                "Обратитесь к администратору лично для уточнения причины."
+            )
+        except Exception:
+            logger.warning(f"Failed to notify user {req.telegram_user_id} about rejection")
+        
+        # Обновляем сообщение админу
+        await cq.message.edit_text(
+            f"❌ Запрос от <b>{html.escape(req.name)}</b> отклонён.\n"
+            f"Комната: {html.escape(req.room_number)}",
+            reply_markup=None,
+            parse_mode="HTML"
+        )
+        
+        # Показываем обновлённый список
+        requests = await db.get_access_requests()
+        count = len(requests)
+        if count == 0:
+            await cq.message.answer("📭 Список ожидающих пуст.")
+        else:
+            await cq.message.answer(
+                f"👥 <b>Оставшиеся запросы: {count}</b>",
+                reply_markup=access_requests_list_kb(requests),
+                parse_mode="HTML"
+            )
+        
+        await cq.answer("Запрос отклонён")
 
     @router.message(Command("test"), is_admin)
     async def test_cmd(message: Message, state: FSMContext) -> None:

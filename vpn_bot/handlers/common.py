@@ -1,4 +1,5 @@
 import html
+import time 
 
 from aiogram import F, Router
 from aiogram.types import Message, ReplyKeyboardRemove
@@ -98,17 +99,13 @@ def register_access_request_handlers(router: Router, db: Database) -> None:
         data = await state.get_data()
         name = data.get("name")
         
-        # TODO: Сохраняем запрос в БД (временно закомментировано)
-        # await db.add_access_request(
-        #     telegram_user_id=message.from_user.id,
-        #     username=message.from_user.username,
-        #     name=name,
-        #     room=room_number,
-        #     requested_at=int(time.time())
-        # )
+        await db.add_access_request(
+            telegram_user_id=message.from_user.id,
+            telegram_username=message.from_user.username,
+            name=name,
+            room_number=room_number,
+            requested_at=int(time.time())
+        )
         
         await state.clear()
-        await message.answer(
-            "✅ Запрос отправлен администратору. Ожидайте подтверждения.",
-            reply_markup=resident_access_request_kb()
-        )
+        await message.answer("✅ Запрос отправлен администратору. Ожидайте подтверждения.", reply_markup=ReplyKeyboardRemove())

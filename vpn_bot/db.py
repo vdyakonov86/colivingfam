@@ -43,6 +43,14 @@ class LinkCode:
     resident_id: int
     expires_at: int
 
+@dataclass
+class AccessRequest:
+    id: int
+    telegram_user_id: int
+    telegram_username: str
+    name: str
+    room_number: str
+    requested_at: int
 
 class Database:
     def __init__(self, path: str, seed_rooms_path: str) -> None:
@@ -87,6 +95,15 @@ class Database:
                     resident_id INTEGER NOT NULL,
                     expires_at INTEGER NOT NULL,
                     FOREIGN KEY (resident_id) REFERENCES residents(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS access_requests (
+                    id INTEGER PRIMARY KEY,
+                    telegram_user_id INTEGER UNIQUE NOT NULL,
+                    telegram_username TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    room_number TEXT NOT NULL,
+                    requested_at INTEGER NOT NULL
                 );
                 """
             )
@@ -333,6 +350,49 @@ class Database:
                 (new_time, resident_id)
             )
             await db.commit()
+
+    async def add_access_request(self, telegram_user_id: int, telegram_username: str, name: str, room_number: str, requested_at: int) -> None:
+        """Добавляет или обновляет запрос доступа от пользователя."""
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "INSERT OR REPLACE INTO access_requests "
+                "(telegram_user_id, telegram_username, name, room_number, requested_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (telegram_user_id, telegram_username, name, room_number, requested_at),
+            )
+            await db.commit()
+
+    async def get_access_requests(self) -> list[AccessRequest]:
+        """Возвращает все активные запросы доступа, отсортированные по времени."""
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT * FROM access_requests ORDER BY requested_at ASC"
+            )
+            rows = await cur.fetchall()
+            return [_row_to_access_request(row) for row in rows]
+
+    async def get_access_request_by_id(self, request_id: int) -> AccessRequest | None:
+        """Возвращает один запрос доступа по его ID."""
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT * FROM access_requests WHERE id = ?",
+                (request_id,)
+            )
+            row = await cur.fetchone()
+            if not row:
+                return None
+            return _row_to_access_request(row)
+            
+    async def delete_access_request(self, request_id: int) -> None:
+        """Удаляет запрос доступа."""
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "DELETE FROM access_requests WHERE id = ?",
+                (request_id,)
+            )
+            await db.commit()
             
 def _row_to_resident(row: aiosqlite.Row) -> Resident:
     return Resident(
@@ -354,6 +414,16 @@ def _row_to_room(row: aiosqlite.Row) -> Room:
         room_number=str(row["room_number"]),
         max_residents=int(row["max_residents"]),
         created_at=int(row["created_at"])
+    )
+
+def _row_to_access_request(row: aiosqlite.Row) -> AccessRequest:
+    return AccessRequest(
+        id=row["id"],
+        telegram_user_id=row["telegram_user_id"],
+        telegram_username=row["telegram_username"],
+        name=row["name"],
+        room_number=row["room_number"],
+        requested_at=row["requested_at"],
     )
 
 def _days_to_seconds(days: int) -> int:

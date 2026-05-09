@@ -18,7 +18,8 @@ def admin_main_kb() -> ReplyKeyboardMarkup:
     b.add(KeyboardButton(text="📋 Список жителей"))
     b.add(KeyboardButton(text="➕ Добавить жителя"))
     b.add(KeyboardButton(text="❌ Удалить жителя"))
-    b.add(KeyboardButton(text="🔗 Код привязки"))
+    b.add(KeyboardButton(text="🔗 Код привязки")),
+    b.add(KeyboardButton(text="👥 Запросы доступа")),
     b.adjust(2)
     return b.as_markup(resize_keyboard=True)
 
@@ -44,7 +45,6 @@ def cancel_reply_kb() -> ReplyKeyboardMarkup:
         resize_keyboard=True,
     )
 
-
 def residents_pick_inline(residents: list[tuple[str, Resident]], *, prefix: str) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     for (room_number, r) in residents:
@@ -52,3 +52,48 @@ def residents_pick_inline(residents: list[tuple[str, Resident]], *, prefix: str)
         b.add(InlineKeyboardButton(text=label[:64], callback_data=f"{prefix}:{r.id}"))
     b.adjust(1)
     return b.as_markup()
+
+def access_requests_list_kb(requests: list) -> InlineKeyboardMarkup:
+    """
+    Клавиатура со списком ожидающих.
+    requests: список объектов AccessRequest
+    """
+    buttons = []
+    for req in requests:
+        # Показываем имя, комнату и статус (есть ли username)
+        username_hint = f" @{req.telegram_username}" if req.telegram_username else ""
+        label = f"👤 {req.name} — {req.room_number}{username_hint}"
+        buttons.append([
+            InlineKeyboardButton(
+                text=label,
+                callback_data=f"access_req:{req.id}"
+            )
+        ])
+    
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def access_request_action_kb(request_id: int, telegram_username: str | None = None) -> InlineKeyboardMarkup:
+    """
+    Клавиатура с действиями для конкретного запроса.
+    """
+    buttons = []
+    
+    # Ссылка на профиль
+    profile_link = f"https://t.me/{telegram_username}"
+    
+    buttons.append([
+        InlineKeyboardButton(text="👤 Открыть профиль", url=profile_link)
+    ])
+    
+    buttons.append([
+        InlineKeyboardButton(
+            text="✅ Добавить",
+            callback_data=f"access_action:add:{request_id}"
+        ),
+        InlineKeyboardButton(
+            text="❌ Отклонить",
+            callback_data=f"access_action:reject:{request_id}"
+        )
+    ])
+    
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
