@@ -13,9 +13,9 @@ from aiogram.types import CallbackQuery, Message
 from vpn_bot.config import Settings
 from vpn_bot.db import Database, normalize_room
 from vpn_bot.filters import IsAdmin
-from vpn_bot.keyboards import admin_main_kb, cancel_reply_kb, residents_pick_inline, rooms_reply_kb, resident_menu_kb
+from vpn_bot.keyboards import admin_main_kb, cancel_reply_kb, residents_pick_inline, rooms_reply_kb, resident_menu_kb, resident_access_request_kb
 from vpn_bot.slug import make_client_email
-from vpn_bot.states import AddResidentStates
+from vpn_bot.states import AddResidentStates, SendAccessRequestStates
 from vpn_bot.texts import format_residents_list
 from vpn_bot.xui_client import XuiApiError, XuiClient
 from vpn_bot.handlers.common import handle_bind_link
@@ -49,24 +49,6 @@ def build_admin_router(settings: Settings, db: Database, xui: XuiClient) -> Rout
     async def admin_cmd(message: Message) -> None:
         await message.answer("Меню администратора.", reply_markup=admin_main_kb())
 
-    @router.message(Command("test"), is_admin)
-    async def test_cmd(message: Message) -> None:
-        if message.from_user is None:
-            return
-
-        r = await db.get_resident_by_telegram(message.from_user.id)
-        if r:
-            await message.answer(
-                f"{html.escape(r.first_name)}, ваше меню:",
-                reply_markup=resident_menu_kb(),
-            )
-            return
-
-        await message.answer(
-            "Вы не привязаны к коливингу. Попросите у администратора код привязки и откройте ссылку, "
-            "или отправьте команду из приглашения.",
-        )
-
     @router.message(F.text == "📋 Список жителей", is_admin)
     async def list_residents(message: Message) -> None:
         residents = await db.list_residents_grouped_with_room()
@@ -85,7 +67,6 @@ def build_admin_router(settings: Settings, db: Database, xui: XuiClient) -> Rout
         await message.answer("Введите имя жителя:", reply_markup=cancel_reply_kb())
 
     @router.message(StateFilter(AddResidentStates.first_name), F.text == "Отмена", is_admin)
-    @router.message(StateFilter(AddResidentStates.last_name), F.text == "Отмена", is_admin)
     @router.message(StateFilter(AddResidentStates.room), F.text == "Отмена", is_admin)
     async def add_cancel(message: Message, state: FSMContext) -> None:
         await state.clear()
@@ -105,12 +86,7 @@ def build_admin_router(settings: Settings, db: Database, xui: XuiClient) -> Rout
             "🏠 Выберите комнату для жителя:",
             reply_markup=rooms_reply_kb(rooms)
         )
-    # @router.message(StateFilter(AddResidentStates.last_name), is_admin)
-    # async def add_last(message: Message, state: FSMContext) -> None:
-    #     await state.update_data(last_name=message.text.strip())
-    #     await state.set_state(AddResidentStates.room)
-    #     await message.answer("Выберите комнату (F1–F12).", reply_markup=rooms_reply_kb())
-
+ 
     @router.message(StateFilter(AddResidentStates.room), is_admin)
     async def add_room(message: Message, state: FSMContext) -> None:
         try:
@@ -255,5 +231,83 @@ def build_admin_router(settings: Settings, db: Database, xui: XuiClient) -> Rout
             parse_mode="HTML",
         )
         await cq.answer()
+
+    @router.message(Command("test"), is_admin)
+    async def test_cmd(message: Message, state: FSMContext) -> None:
+        if message.from_user is None:
+            return
+
+        r = await db.get_resident_by_telegram(message.from_user.id)
+        if r:
+            await message.answer(
+                f"{html.escape(r.first_name)}, ваше меню:",
+                reply_markup=resident_menu_kb(),
+            )
+            return
+        
+        await message.answer(
+            "Вы не привязаны к боту. Можете отправить запрос на привязку",
+            reply_markup=resident_access_request_kb()
+        )
+
+    @router.callback_query(F.data == "resident:access_request")
+    async def cb_access_request(cq: CallbackQuery, state: FSMContext) -> None:
+        if cq.from_user is None or cq.message is None:
+            await cq.answer()
+            return
+
+        await state.set_state(SendAccessRequestStates.name)
+        await cq.message.answer(
+            "Введите имя (если людей с вашим именем несколько, можете написать фамилию или по-другому, чтобы было понятно, кто вы):",
+            reply_markup=cancel_reply_kb()
+        )
+        await cq.answer()
+    
+    @router.message(StateFilter(SendAccessRequestStates.name))
+    async def process_name(message: Message, state: FSMContext) -> None:
+        name = message.text.strip()
+        if not name:
+            await message.answer("❌ Имя не может быть пустым.", reply_markup=cancel_reply_kb())
+            return
+        
+        await state.update_data(name=name)
+        await state.set_state(SendAccessRequestStates.room)
+        rooms = await db.get_all_room_numbers()
+        await message.answer(
+            "🏠 Выберите комнату:",
+            reply_markup=rooms_reply_kb(rooms)
+        )
+    
+    @router.message(StateFilter(SendAccessRequestStates.room))
+    async def process_room(message: Message, state: FSMContext) -> None:
+        try:
+            room_number = normalize_room(message.text.strip())
+        except ValueError as e:
+            await message.answer(str(e), reply_markup=cancel_reply_kb())
+            return
+        
+        data = await state.get_data()
+        name = data.get("name")
+        
+        # Сохраняем запрос в БД
+        # await db.add_access_request(
+        #     telegram_user_id=message.from_user.id,
+        #     username=message.from_user.username,
+        #     name=name,
+        #     room=room_number,
+        #     requested_at=int(time.time())
+        # )
+        
+        await state.clear()
+        await message.answer(
+            "✅ Запрос отправлен администратору. Ожидайте подтверждения.",
+            reply_markup=admin_main_kb()
+        )
+
+    @router.message(StateFilter(SendAccessRequestStates.name), F.text == "Отмена")
+    @router.message(StateFilter(SendAccessRequestStates.room), F.text == "Отмена")
+    async def add_cancel_access_request(message: Message, state: FSMContext) -> None:
+        await state.clear()
+        await message.answer("Отменено.", reply_markup=resident_access_request_kb())
 
     return router

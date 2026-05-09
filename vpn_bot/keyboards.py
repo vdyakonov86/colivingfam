@@ -32,6 +32,11 @@ def resident_menu_kb() -> InlineKeyboardMarkup:
     b.adjust(1)
     return b.as_markup()
 
+def resident_access_request_kb() -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.add(InlineKeyboardButton(text="Отправить запрос на привязку", callback_data="resident:access_request"))
+    b.adjust(1)
+    return b.as_markup()
 
 def cancel_reply_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
