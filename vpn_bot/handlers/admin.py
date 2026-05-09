@@ -39,18 +39,19 @@ def build_admin_router(settings: Settings, db: Database, xui: XuiClient) -> Rout
             return
         else:
             admin_name = message.from_user.full_name if message.from_user else "Администратор"
-            await message.answer(
+            message_text = (
                 f"👋 Здравствуйте, {html.escape(admin_name)}!\n\n"
                 "🛠 <b>Панель управления коливингом</b>\n"
                 "Здесь вы можете управлять жильцами и их ключами.\n\n"
-                "Выберите действие с помощью кнопок ниже.",
-                parse_mode="HTML",
-                reply_markup=admin_main_kb(),
+                "Выберите действие с помощью кнопок ниже."
             )
+            await update_admin_keyboard_with_access_request_count(db, message=message, message_text=message_text)
+
 
     @router.message(Command("admin"), is_admin)
     async def admin_cmd(message: Message) -> None:
-        await message.answer("Меню администратора.", reply_markup=admin_main_kb())
+        await update_admin_keyboard_with_access_request_count(db, message=message)
+
 
     @router.message(F.text == "📋 Список жителей", is_admin)
     async def list_residents(message: Message) -> None:
@@ -73,7 +74,7 @@ def build_admin_router(settings: Settings, db: Database, xui: XuiClient) -> Rout
     @router.message(StateFilter(AddResidentStates.room), F.text == "Отмена", is_admin)
     async def add_cancel(message: Message, state: FSMContext) -> None:
         await state.clear()
-        await message.answer("Отменено.", reply_markup=admin_main_kb())
+        await update_admin_keyboard_with_access_request_count(db, message=message, message_text="Отменено")
 
     @router.message(StateFilter(AddResidentStates.first_name), is_admin)
     async def add_first(message: Message, state: FSMContext) -> None:
@@ -122,9 +123,10 @@ def build_admin_router(settings: Settings, db: Database, xui: XuiClient) -> Rout
         max_residents = room.max_residents
         if (room_residents_count + 1) > max_residents:
             await state.clear()
-            await message.answer(
-                f"Не удалось привязать жителя к комнате '{room_number}'. К ней привязано макс. возможное количество жителей: {max_residents})", 
-                reply_markup=admin_main_kb()
+            await update_admin_keyboard_with_access_request_count(
+                db, 
+                message=message, 
+                message_text=f"Не удалось привязать жителя к комнате '{room_number}'. К ней привязано макс. возможное количество жителей: {max_residents})"
             )
             return
         
@@ -135,7 +137,7 @@ def build_admin_router(settings: Settings, db: Database, xui: XuiClient) -> Rout
         except XuiApiError as e:
             logger.exception("3x-ui add client failed")
             await state.clear()
-            await message.answer(f"Ошибка панели 3x-ui: {e}", reply_markup=admin_main_kb())
+            await update_admin_keyboard_with_access_request_count(db, message=message, message_text=f"Ошибка панели 3x-ui: {e}")
             return
         except Exception as e:
             logger.exception("Unexpected error during resident creation")
@@ -146,15 +148,11 @@ def build_admin_router(settings: Settings, db: Database, xui: XuiClient) -> Rout
                 except XuiApiError:
                     logger.exception("Rollback delete client failed")
             await state.clear()
-            await message.answer("Произошла внутренняя ошибка. Попробуйте позже.", reply_markup=admin_main_kb())
+            await update_admin_keyboard_with_access_request_count(db, message=message, message_text="Произошла внутренняя ошибка. Попробуйте позже.")
             return
 
         await state.clear()
-        await message.answer(
-            f"Житель <b>{html.escape(first)}</b> ({html.escape(room_number)}) добавлен",
-            parse_mode="HTML",
-            reply_markup=admin_main_kb(),
-        )
+        await update_admin_keyboard_with_access_request_count(db, message=message, message_text=f"Житель <b>{html.escape(first)}</b> ({html.escape(room_number)}) добавлен")
 
     @router.message(F.text == "❌ Удалить жителя", is_admin)
     async def del_pick(message: Message) -> None:
@@ -235,7 +233,7 @@ def build_admin_router(settings: Settings, db: Database, xui: XuiClient) -> Rout
         )
         await cq.answer()
 
-    @router.message(F.text == "👥 Запросы доступа", is_admin)
+    @router.message(F.text.startswith("👥 Запросы доступа"), is_admin)
     async def list_access_requests(message: Message) -> None:
         requests = await db.get_access_requests()
         count = len(requests)
@@ -389,11 +387,7 @@ def build_admin_router(settings: Settings, db: Database, xui: XuiClient) -> Rout
         except Exception:
             logger.warning(f"Failed to notify user {telegram_user_id}")
         
-        await message.answer(
-            f"✅ Пользователь <b>{html.escape(name)}</b> добавлен",
-            parse_mode="HTML",
-            reply_markup=admin_main_kb()
-        )
+        await update_admin_keyboard_with_access_request_count(db, message=message, message_text=f"✅ Пользователь <b>{html.escape(name)}</b> добавлен")
 
     @router.callback_query(F.data.startswith("access_action:reject:"), is_admin)
     async def reject_access_request(cq: CallbackQuery) -> None:
@@ -433,15 +427,33 @@ def build_admin_router(settings: Settings, db: Database, xui: XuiClient) -> Rout
         requests = await db.get_access_requests()
         count = len(requests)
         if count == 0:
-            await cq.message.answer("📭 Список ожидающих пуст.")
+            await update_admin_keyboard_with_access_request_count(db, callback=cq, message_text="📭 Список ожидающих пуст")
         else:
             await cq.message.answer(
                 f"👥 <b>Оставшиеся запросы: {count}</b>",
                 reply_markup=access_requests_list_kb(requests),
                 parse_mode="HTML"
             )
+
+    async def update_admin_keyboard_with_access_request_count(
+        db: Database, 
+        message: Message = None, 
+        callback: CallbackQuery = None, 
+        message_text: str = "Главное меню:"
+    ) -> None:
+        """
+        Обновляет клавиатуру админа с актуальным количеством ожидающих запросов.
+        Принимает либо message, либо callback (одно из двух).
+        """
+        requests = await db.get_access_requests()
+        count = len(requests)
         
-        await cq.answer("Запрос отклонён")
+        keyboard = admin_main_kb(access_requests_count=count)
+        
+        if message:
+            await message.answer(message_text, reply_markup=keyboard, parse_mode="HTML")
+        elif callback and callback.message:
+            await callback.message.answer(message_text, reply_markup=keyboard, parse_mode="HTML")
 
     @router.message(Command("test"), is_admin)
     async def test_cmd(message: Message, state: FSMContext) -> None:

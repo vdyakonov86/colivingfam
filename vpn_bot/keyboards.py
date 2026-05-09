@@ -13,13 +13,22 @@ def rooms_reply_kb(room_numbers: list[str]) -> ReplyKeyboardMarkup:
     builder.row(KeyboardButton(text="Отмена"))
     return builder.as_markup(resize_keyboard=True)
 
-def admin_main_kb() -> ReplyKeyboardMarkup:
+def admin_main_kb(access_requests_count: int = 0) -> ReplyKeyboardMarkup:
+    """
+    Главная клавиатура администратора.
+    Если access_requests_count > 0, показывает количество ожидающих запросов.
+    """
+    # Формируем текст кнопки с количеством
+    access_text = "👥 Запросы доступа"
+    if access_requests_count > 0:
+        access_text = f"👥 Запросы доступа ({access_requests_count})"
+
     b = ReplyKeyboardBuilder()
-    b.add(KeyboardButton(text="📋 Список жителей"))
+    b.add(KeyboardButton(text=access_text))
     b.add(KeyboardButton(text="➕ Добавить жителя"))
     b.add(KeyboardButton(text="❌ Удалить жителя"))
-    b.add(KeyboardButton(text="🔗 Код привязки")),
-    b.add(KeyboardButton(text="👥 Запросы доступа")),
+    b.add(KeyboardButton(text="🔗 Код привязки"))
+    b.add(KeyboardButton(text="📋 Список жителей"))
     b.adjust(2)
     return b.as_markup(resize_keyboard=True)
 
