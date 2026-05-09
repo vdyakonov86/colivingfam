@@ -60,7 +60,7 @@ def register_access_request_handlers(router: Router, db: Database) -> None:
 
         await state.set_state(SendAccessRequestStates.name)
         await cq.message.answer(
-            "Введите имя (если людей с вашим именем несколько, обозначьте себя по-другому, чтобы было понятно, кто вы):",
+            "Введите имя:",
             reply_markup=cancel_reply_kb()
         )
         await cq.answer()
