@@ -1,7 +1,14 @@
 import html
-from aiogram.types import Message
-from vpn_bot.db import Database
-from vpn_bot.keyboards import resident_menu_kb
+
+from aiogram import F, Router
+from aiogram.types import Message, ReplyKeyboardRemove
+from aiogram.filters import StateFilter
+from aiogram.types import CallbackQuery, Message
+from aiogram.fsm.context import FSMContext
+
+from vpn_bot.db import Database, normalize_room
+from vpn_bot.keyboards import resident_menu_kb, cancel_reply_kb, rooms_reply_kb, resident_menu_kb, resident_access_request_kb
+from vpn_bot.states import SendAccessRequestStates
 
 async def handle_bind_link(message: Message, db: Database, code: str) -> bool:
     """
@@ -40,3 +47,68 @@ async def handle_bind_link(message: Message, db: Database, code: str) -> bool:
         parse_mode="HTML"
     )
     return True
+
+def register_access_request_handlers(router: Router, db: Database) -> None:
+    """Регистрирует общие обработчики запроса доступа как для админа, так и для пользователя."""
+    
+    @router.callback_query(F.data == "resident:access_request")
+    async def cb_access_request(cq: CallbackQuery, state: FSMContext) -> None:
+        if cq.from_user is None or cq.message is None:
+            await cq.answer()
+            return
+
+        await state.set_state(SendAccessRequestStates.name)
+        await cq.message.answer(
+            "Введите имя (если людей с вашим именем несколько, обозначьте себя по-другому, чтобы было понятно, кто вы):",
+            reply_markup=cancel_reply_kb()
+        )
+        await cq.answer()
+    
+    @router.message(StateFilter(SendAccessRequestStates.name), F.text == "Отмена")
+    @router.message(StateFilter(SendAccessRequestStates.room), F.text == "Отмена")
+    async def cancel_access_request(message: Message, state: FSMContext) -> None:
+        await state.clear()
+        # Убираем Reply-клавиатуру с кнопкой "Отмена"
+        await message.answer("Отменено.", reply_markup=ReplyKeyboardRemove())
+        await message.answer("Вы не привязаны к боту. Можете отправить запрос на привязку", reply_markup=resident_access_request_kb())
+    
+    @router.message(StateFilter(SendAccessRequestStates.name))
+    async def process_name(message: Message, state: FSMContext) -> None:
+        name = message.text.strip()
+        if not name:
+            await message.answer("❌ Имя не может быть пустым.", reply_markup=cancel_reply_kb())
+            return
+        
+        await state.update_data(name=name)
+        await state.set_state(SendAccessRequestStates.room)
+        rooms = await db.get_all_room_numbers()
+        await message.answer(
+            "🏠 Выберите комнату:",
+            reply_markup=rooms_reply_kb(rooms)
+        )
+    
+    @router.message(StateFilter(SendAccessRequestStates.room))
+    async def process_room(message: Message, state: FSMContext) -> None:
+        try:
+            room_number = normalize_room(message.text.strip())
+        except ValueError as e:
+            await message.answer(str(e), reply_markup=cancel_reply_kb())
+            return
+        
+        data = await state.get_data()
+        name = data.get("name")
+        
+        # TODO: Сохраняем запрос в БД (временно закомментировано)
+        # await db.add_access_request(
+        #     telegram_user_id=message.from_user.id,
+        #     username=message.from_user.username,
+        #     name=name,
+        #     room=room_number,
+        #     requested_at=int(time.time())
+        # )
+        
+        await state.clear()
+        await message.answer(
+            "✅ Запрос отправлен администратору. Ожидайте подтверждения.",
+            reply_markup=resident_access_request_kb()
+        )

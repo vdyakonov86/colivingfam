@@ -11,13 +11,16 @@ from aiogram.types import BufferedInputFile, CallbackQuery, Message
 from vpn_bot.config import Settings
 from vpn_bot.db import Database
 from vpn_bot.filters import IsNotAdmin
-from vpn_bot.keyboards import resident_menu_kb
+from vpn_bot.keyboards import resident_menu_kb, resident_access_request_kb
 from vpn_bot.xui_client import XuiClient
-from vpn_bot.handlers.common import handle_bind_link
+from vpn_bot.handlers.common import handle_bind_link, register_access_request_handlers
 
 def build_user_router(settings: Settings, db: Database, xui: XuiClient) -> Router:
     router = Router(name="user")
     not_admin = IsNotAdmin(settings)
+
+    # Регистрируем общие обработчики запроса доступа
+    register_access_request_handlers(router, db) 
 
     @router.message(CommandStart(), not_admin)
     async def user_start(message: Message, command: CommandObject) -> None:
@@ -39,8 +42,8 @@ def build_user_router(settings: Settings, db: Database, xui: XuiClient) -> Route
             return
 
         await message.answer(
-            "Вы не привязаны к коливингу. Попросите у администратора код привязки и откройте ссылку, "
-            "или отправьте команду из приглашения.",
+            "Вы не привязаны к боту. Можете отправить запрос на привязку",
+            reply_markup=resident_access_request_kb()
         )
 
     @router.callback_query(F.data == "resident:sub")
