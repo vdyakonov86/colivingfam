@@ -24,6 +24,7 @@ class Resident:
     last_name: str
     room_id: int
     telegram_user_id: int | None
+    telegram_username: str | None
     xui_email: str
     xui_uuid: str
     xui_sub_id: str
@@ -80,6 +81,7 @@ class Database:
                     last_name TEXT NOT NULL,
                     room_id INTEGER NOT NULL,
                     telegram_user_id INTEGER UNIQUE,
+                    telegram_username TEXT,
                     xui_email TEXT NOT NULL UNIQUE,
                     xui_uuid TEXT NOT NULL UNIQUE,
                     xui_sub_id TEXT NOT NULL,
@@ -255,11 +257,11 @@ class Database:
                 result.append((room_number, resident))
             return result
 
-    async def bind_telegram(self, resident_id: int, telegram_user_id: int) -> None:
+    async def bind_telegram(self, resident_id: int, telegram_user_id: int, telegram_username: str) -> None:
         async with aiosqlite.connect(self.path) as db:
             await db.execute(
-                "UPDATE residents SET telegram_user_id = ? WHERE id = ?",
-                (telegram_user_id, resident_id),
+                "UPDATE residents SET telegram_user_id = ?, telegram_username = ? WHERE id = ?",
+                (telegram_user_id, telegram_username, resident_id),
             )
             await db.commit()
 
@@ -401,6 +403,7 @@ def _row_to_resident(row: aiosqlite.Row) -> Resident:
         last_name=str(row["last_name"]),
         room_id=int(row["room_id"]),
         telegram_user_id=int(row["telegram_user_id"]) if row["telegram_user_id"] is not None else None,
+        telegram_username=str(row["telegram_username"]) if row["telegram_username"] is not None else None,
         xui_email=str(row["xui_email"]),
         xui_uuid=str(row["xui_uuid"]),
         xui_sub_id=str(row["xui_sub_id"]),

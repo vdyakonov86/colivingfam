@@ -39,7 +39,7 @@ async def handle_bind_link(message: Message, db: Database, code: str) -> bool:
         return False
 
     # Выполняем привязку
-    await db.bind_telegram(r.id, message.from_user.id)
+    await db.bind_telegram(r.id, message.from_user.id, message.from_user.username)
 
     await message.answer(
         f"Привязка выполнена: <b>{html.escape(r.first_name)}</b> ({html.escape(room_number)}).\n"

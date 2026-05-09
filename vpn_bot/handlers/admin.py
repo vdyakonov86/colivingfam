@@ -63,7 +63,7 @@ def build_admin_router(settings: Settings, db: Database, xui: XuiClient) -> Rout
         # Telegram message limit ~4096
         chunk = 3800
         for i in range(0, len(text), chunk):
-            await message.answer(text[i : i + chunk], parse_mode="HTML")
+            await message.answer(text[i : i + chunk], parse_mode="HTML", disable_web_page_preview=True)
 
     @router.message(F.text == "➕ Добавить жителя", is_admin)
     async def add_begin(message: Message, state: FSMContext) -> None:
@@ -305,7 +305,8 @@ def build_admin_router(settings: Settings, db: Database, xui: XuiClient) -> Rout
             request_id=request_id,
             name=req.name,
             room_number=req.room_number,
-            telegram_user_id=req.telegram_user_id
+            telegram_user_id=req.telegram_user_id,
+            telegram_username=req.telegram_username
         )
         await state.set_state(ProcessAccessRequestStates.choosing_room)
         
@@ -335,6 +336,7 @@ def build_admin_router(settings: Settings, db: Database, xui: XuiClient) -> Rout
         name = data["name"]
         request_id = data["request_id"]
         telegram_user_id = data["telegram_user_id"]
+        telegram_username = data["telegram_username"]
         
         room = await db.get_room_by_room_number(room_number)
         if room is None:
@@ -358,7 +360,7 @@ def build_admin_router(settings: Settings, db: Database, xui: XuiClient) -> Rout
             rid = await db.add_resident(name, "", room_number, email, client_uuid, sub_id)
             
             # Привязываем Telegram сразу
-            await db.bind_telegram(rid, telegram_user_id)
+            await db.bind_telegram(rid, telegram_user_id, telegram_username)
             
             # Удаляем запрос доступа
             await db.delete_access_request(request_id)
