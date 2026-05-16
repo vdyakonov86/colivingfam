@@ -16,6 +16,18 @@ def normalize_room(room: str) -> str:
         raise ValueError("Комната должна быть формата FN, где N - номер комнаты")
     return r
 
+@dataclass
+class Place:
+    id: int
+    name: str
+
+@dataclass
+class Room:
+    id: int
+    room_number: str
+    max_residents: int
+    place_id: int
+    created_at: int
 
 @dataclass
 class Resident:
@@ -32,13 +44,6 @@ class Resident:
     last_reset_at: int
 
 @dataclass
-class Room:
-    id: int
-    room_number: str
-    max_residents: int
-    created_at: int
-
-@dataclass
 class LinkCode:
     code: str
     resident_id: int
@@ -51,6 +56,8 @@ class AccessRequest:
     telegram_username: str
     name: str
     room_number: str
+    place_id: int
+    place_name: str
     requested_at: int
 
 class Database:
@@ -68,11 +75,19 @@ class Database:
         async with aiosqlite.connect(self.path) as db:
             await db.executescript(
                 """
+                CREATE TABLE IF NOT EXISTS places (
+                    id INTEGER PRIMARY KEY,
+                    name TEXT NOT NULL UNIQUE
+                );
+
                 CREATE TABLE IF NOT EXISTS rooms (
                     id INTEGER PRIMARY KEY,
-                    room_number TEXT UNIQUE NOT NULL,  
-                    max_residents INTEGER NOT NULL,  
-                    created_at INTEGER NOT NULL
+                    room_number TEXT NOT NULL,
+                    max_residents INTEGER NOT NULL,
+                    place_id INTEGER NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    FOREIGN KEY (place_id) REFERENCES places(id) ON DELETE RESTRICT,
+                    UNIQUE(place_id, room_number)
                 );
 
                 CREATE TABLE IF NOT EXISTS residents (
@@ -105,7 +120,9 @@ class Database:
                     telegram_username TEXT NOT NULL,
                     name TEXT NOT NULL,
                     room_number TEXT NOT NULL,
-                    requested_at INTEGER NOT NULL
+                    place_id INTEGER NOT NULL,
+                    requested_at INTEGER NOT NULL,
+                    FOREIGN KEY (place_id) REFERENCES places(id) ON DELETE RESTRICT
                 );
                 """
             )
@@ -121,6 +138,13 @@ class Database:
 
         await self.seed_rooms_from_json(self.seed_rooms_path)
 
+    async def list_places(self) -> list[Place]:
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute("SELECT * FROM places ORDER BY name")
+            rows = await cur.fetchall()
+            return [_row_to_place(r) for r in rows]
+
     async def count_residents(self) -> int:
         async with aiosqlite.connect(self.path) as db:
             cur = await db.execute("SELECT COUNT(*) FROM residents")
@@ -135,6 +159,7 @@ class Database:
 
     async def add_resident(
         self,
+        place_id: int,
         first_name: str,
         last_name: str,
         room_number: str,
@@ -143,7 +168,7 @@ class Database:
         xui_sub_id: str,
     ) -> int:
         room_number = normalize_room(room_number)
-        room = await self.get_room_by_room_number(room_number)
+        room = await self.get_room_by_place_and_number(place_id, room_number)
         if room is None:
             raise ValueError("Комната не найдена")
         room_id = room.id
@@ -160,18 +185,31 @@ class Database:
             await db.commit()
             return int(cur.lastrowid)
 
-    async def get_room_by_room_number(self, room_number: str) -> Room | None:
+    async def get_place_id_by_name(self, place_name: str) -> int | None:
         async with aiosqlite.connect(self.path) as db:
             db.row_factory = aiosqlite.Row
-            cur = await db.execute("SELECT * FROM rooms WHERE room_number = ?", (room_number,))
+            cur = await db.execute("SELECT id FROM places WHERE name = ?", (place_name,))
             row = await cur.fetchone()
-            if not row:
-                return None
-            return _row_to_room(row)
+            return int(row["id"]) if row else None
 
-    async def get_all_room_numbers(self) -> list[str]:
+
+    async def get_room_by_place_and_number(self, place_id: int, room_number: str) -> Room | None:
         async with aiosqlite.connect(self.path) as db:
-            cur = await db.execute("SELECT room_number FROM rooms")
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT * FROM rooms WHERE place_id = ? AND room_number = ?",
+                (place_id, room_number),
+            )
+            row = await cur.fetchone()
+            return _row_to_room(row) if row else None
+
+
+    async def get_all_room_numbers(self, place_id: int) -> list[str]:
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                "SELECT room_number FROM rooms WHERE place_id = ?",
+                (place_id,),
+            )
             rows = await cur.fetchall()
             rooms = [row[0] for row in rows]
             rooms.sort(key=lambda x: int(x[1:]))
@@ -256,6 +294,33 @@ class Database:
                 resident = _row_to_resident(row)
                 result.append((room_number, resident))
             return result
+        
+    async def list_residents_grouped_with_place_and_room(self) -> list[tuple[str, str, Resident]]:
+        """
+        Возвращает список (place_name, room_number, resident)
+        place_name: 'fontanka' / 'nevsky'
+        """
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                """
+                SELECT p.name AS place_name, rm.room_number, r.*
+                FROM residents r
+                JOIN rooms rm ON r.room_id = rm.id
+                JOIN places p ON rm.place_id = p.id
+                ORDER BY
+                    p.name COLLATE NOCASE,
+                    CAST(SUBSTR(rm.room_number, 2) AS INTEGER),
+                    r.last_name COLLATE NOCASE,
+                    r.first_name COLLATE NOCASE
+                """
+            )
+            rows = await cur.fetchall()
+
+            result: list[tuple[str, str, Resident]] = []
+            for row in rows:
+                result.append((str(row["place_name"]), str(row["room_number"]), _row_to_resident(row)))
+            return result
 
     async def bind_telegram(self, resident_id: int, telegram_user_id: int, telegram_username: str) -> None:
         async with aiosqlite.connect(self.path) as db:
@@ -306,29 +371,68 @@ class Database:
             )
             
     async def seed_rooms_from_json(self, json_path: str) -> None:
-        with open(json_path) as f:
+        """
+        JSON формат:
+        {
+        "places":[
+            {"name":"fontanka","rooms":[{"room_number":"F1","max_residents":4}, ...]},
+            {"name":"nevsky","rooms":[...]}
+        ]
+        }
+        """
+        with open(json_path, encoding="utf-8") as f:
             data = json.load(f)
+
+        now = int(time.time())
+
         async with aiosqlite.connect(self.path) as db:
-            for room in data["rooms"]:
-                room_number = room["room_number"]
-                max_residents = room.get("max_residents")
-                if max_residents is None:
+            db.row_factory = aiosqlite.Row
+            await db.execute("PRAGMA foreign_keys = ON")
+
+            # 1) upsert places
+            for p in data.get("places", []):
+                name = (p.get("name") or "").strip()
+                if not name:
                     continue
-                # Проверяем, существует ли комната
-                cur = await db.execute("SELECT id FROM rooms WHERE room_number = ?", (room_number,))
+
+                await db.execute(
+                    """
+                    INSERT INTO places (name)
+                    VALUES (?)
+                    ON CONFLICT(name) DO NOTHING
+                    """,
+                    (name,),
+                )
+
+            # 2) upsert rooms by (place_id, room_number)
+            for p in data.get("places", []):
+                place_name = (p.get("name") or "").strip()
+                if not place_name:
+                    continue
+
+                cur = await db.execute("SELECT id FROM places WHERE name = ?", (place_name,))
                 row = await cur.fetchone()
-                if row:
-                    # Обновляем существующую
+                if not row:
+                    continue
+                place_id = int(row["id"])
+
+                for room in p.get("rooms", []):
+                    room_number = (room.get("room_number") or "").strip().upper()
+                    max_residents = room.get("max_residents")
+                    if not room_number or max_residents is None:
+                        continue
+
                     await db.execute(
-                        "UPDATE rooms SET max_residents = ?, created_at = ? WHERE room_number = ?",
-                        (max_residents, int(time.time()), room_number)
+                        """
+                        INSERT INTO rooms (room_number, max_residents, place_id, created_at)
+                        VALUES (?, ?, ?, ?)
+                        ON CONFLICT(place_id, room_number) DO UPDATE SET
+                            max_residents = excluded.max_residents,
+                            created_at = excluded.created_at
+                        """,
+                        (room_number, int(max_residents), place_id, now),
                     )
-                else:
-                    # Вставляем новую
-                    await db.execute(
-                        "INSERT INTO rooms (room_number, max_residents, created_at) VALUES (?, ?, ?)",
-                        (room_number, max_residents, int(time.time()))
-                    )
+
             await db.commit()
 
     async def get_residents_for_reset(self, traffic_reset_period: int) -> list[Resident]:
@@ -353,40 +457,55 @@ class Database:
             )
             await db.commit()
 
-    async def add_access_request(self, telegram_user_id: int, telegram_username: str, name: str, room_number: str, requested_at: int) -> None:
-        """Добавляет или обновляет запрос доступа от пользователя."""
+    async def add_access_request(
+        self,
+        telegram_user_id: int,
+        telegram_username: str,
+        name: str,
+        room_number: str,
+        place_id: int,
+        requested_at: int
+    ) -> None:
         async with aiosqlite.connect(self.path) as db:
             await db.execute(
-                "INSERT OR REPLACE INTO access_requests "
-                "(telegram_user_id, telegram_username, name, room_number, requested_at) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (telegram_user_id, telegram_username, name, room_number, requested_at),
+                """
+                INSERT OR REPLACE INTO access_requests
+                (telegram_user_id, telegram_username, name, room_number, place_id, requested_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (telegram_user_id, telegram_username, name, room_number, place_id, requested_at),
             )
             await db.commit()
 
     async def get_access_requests(self) -> list[AccessRequest]:
-        """Возвращает все активные запросы доступа, отсортированные по времени."""
         async with aiosqlite.connect(self.path) as db:
             db.row_factory = aiosqlite.Row
             cur = await db.execute(
-                "SELECT * FROM access_requests ORDER BY requested_at ASC"
+                """
+                SELECT ar.*, p.name AS place_name
+                FROM access_requests ar
+                JOIN places p ON p.id = ar.place_id
+                ORDER BY ar.requested_at ASC
+                """
             )
             rows = await cur.fetchall()
-            return [_row_to_access_request(row) for row in rows]
+            return [_row_to_access_request(r) for r in rows]
 
     async def get_access_request_by_id(self, request_id: int) -> AccessRequest | None:
-        """Возвращает один запрос доступа по его ID."""
         async with aiosqlite.connect(self.path) as db:
             db.row_factory = aiosqlite.Row
             cur = await db.execute(
-                "SELECT * FROM access_requests WHERE id = ?",
-                (request_id,)
+                """
+                SELECT ar.*, p.name AS place_name
+                FROM access_requests ar
+                JOIN places p ON p.id = ar.place_id
+                WHERE ar.id = ?
+                """,
+                (request_id,),
             )
             row = await cur.fetchone()
-            if not row:
-                return None
-            return _row_to_access_request(row)
-            
+            return _row_to_access_request(row) if row else None
+
     async def delete_access_request(self, request_id: int) -> None:
         """Удаляет запрос доступа."""
         async with aiosqlite.connect(self.path) as db:
@@ -411,22 +530,31 @@ def _row_to_resident(row: aiosqlite.Row) -> Resident:
         last_reset_at=int(row["last_reset_at"])
     )
 
+def _row_to_place(row: aiosqlite.Row) -> Place:
+    return Place(
+        id=int(row["id"]),
+        name=str(row["name"])
+    )
+
 def _row_to_room(row: aiosqlite.Row) -> Room:
     return Room(
         id=int(row["id"]),
         room_number=str(row["room_number"]),
         max_residents=int(row["max_residents"]),
+        place_id=int(row["place_id"]),
         created_at=int(row["created_at"])
     )
 
 def _row_to_access_request(row: aiosqlite.Row) -> AccessRequest:
     return AccessRequest(
-        id=row["id"],
-        telegram_user_id=row["telegram_user_id"],
-        telegram_username=row["telegram_username"],
-        name=row["name"],
-        room_number=row["room_number"],
-        requested_at=row["requested_at"],
+        id=int(row["id"]),
+        telegram_user_id=int(row["telegram_user_id"]),
+        telegram_username=str(row["telegram_username"]),
+        name=str(row["name"]),
+        room_number=str(row["room_number"]),
+        place_id=int(row["place_id"]),
+        place_name=str(row["place_name"]),
+        requested_at=int(row["requested_at"]),
     )
 
 def _days_to_seconds(days: int) -> int:

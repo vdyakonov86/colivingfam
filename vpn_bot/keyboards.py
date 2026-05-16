@@ -2,8 +2,17 @@ from __future__ import annotations
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
-from vpn_bot.db import Resident
+from vpn_bot.db import Resident, Place
+from vpn_bot.texts import place_title_from_name
 
+
+def places_pick_inline(places: list[Place], *, prefix: str) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    for p in places:
+        title = "Фонтанка" if p.name == "fontanka" else ("Невский" if p.name == "nevsky" else p.name)
+        b.add(InlineKeyboardButton(text=title, callback_data=f"{prefix}:{p.id}"))
+    b.adjust(2)
+    return b.as_markup()
 
 def rooms_reply_kb(room_numbers: list[str]) -> ReplyKeyboardMarkup:
     builder = ReplyKeyboardBuilder()
@@ -63,24 +72,14 @@ def residents_pick_inline(residents: list[tuple[str, Resident]], *, prefix: str)
     return b.as_markup()
 
 def access_requests_list_kb(requests: list) -> InlineKeyboardMarkup:
-    """
-    Клавиатура со списком ожидающих.
-    requests: список объектов AccessRequest
-    """
     buttons = []
     for req in requests:
-        # Показываем имя, комнату и статус (есть ли username)
         username_hint = f" @{req.telegram_username}" if req.telegram_username else ""
-        label = f"👤 {req.name} — {req.room_number}{username_hint}"
-        buttons.append([
-            InlineKeyboardButton(
-                text=label,
-                callback_data=f"access_req:{req.id}"
-            )
-        ])
-    
+        place_hint = place_title_from_name(req.place_name)
+        label = f"👤 {req.name} — {req.room_number} ({place_hint}){username_hint}"
+        buttons.append([InlineKeyboardButton(text=label, callback_data=f"access_req:{req.id}")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
-
+    
 def access_request_action_kb(request_id: int, telegram_username: str | None = None) -> InlineKeyboardMarkup:
     """
     Клавиатура с действиями для конкретного запроса.

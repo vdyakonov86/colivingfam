@@ -8,8 +8,42 @@ from aiogram.types import CallbackQuery, Message
 from aiogram.fsm.context import FSMContext
 
 from vpn_bot.db import Database, normalize_room
-from vpn_bot.keyboards import resident_menu_kb, cancel_reply_kb, rooms_reply_kb, resident_menu_kb, resident_access_request_kb
+from vpn_bot.keyboards import resident_menu_kb, cancel_reply_kb, rooms_reply_kb, resident_menu_kb, resident_access_request_kb, places_pick_inline
 from vpn_bot.states import SendAccessRequestStates
+from vpn_bot.xui_client import XuiClient
+from vpn_bot.slug import make_client_email
+
+async def create_resident_with_checks(
+    *,
+    db: Database,
+    xui: XuiClient,
+    place_id: int,
+    first_name: str,
+    last_name: str,
+    room_number: str,
+    tg_id: int,
+) -> tuple[int, str]:
+    """
+    Делает:
+    - проверка существования комнаты в place
+    - проверка лимита комнаты
+    - создание клиента в 3x-ui
+    - добавление resident в БД (с place_id)
+    Возвращает: (resident_id, xui_uuid)
+    """
+    room = await db.get_room_by_place_and_number(place_id, room_number)
+    if room is None:
+        raise ValueError(f"Комнаты '{room_number}' не существует в выбранном коливинге")
+
+    room_residents_count = await db.count_residents_by_room_id(room.id)
+    if room_residents_count >= room.max_residents:
+        raise ValueError(f"Комната {room_number} заполнена (макс. {room.max_residents} чел.)")
+
+    email = make_client_email(room_number, last_name, first_name)
+    _, client_uuid, sub_id = await xui.add_vless_client(email, tg_id=tg_id)
+
+    rid = await db.add_resident(place_id, first_name, last_name, room_number, email, client_uuid, sub_id)
+    return rid, client_uuid
 
 async def handle_bind_link(message: Message, db: Database, code: str) -> bool:
     """
@@ -52,41 +86,53 @@ async def handle_bind_link(message: Message, db: Database, code: str) -> bool:
 def register_access_request_handlers(router: Router, db: Database) -> None:
     """Регистрирует общие обработчики запроса доступа как для админа, так и для пользователя."""
     
+    @router.message(StateFilter(SendAccessRequestStates.place), F.text == "Отмена")
+    @router.message(StateFilter(SendAccessRequestStates.name), F.text == "Отмена")
+    @router.message(StateFilter(SendAccessRequestStates.room), F.text == "Отмена")
+    async def cancel_access_request(message: Message, state: FSMContext) -> None:
+        await state.clear()
+        await message.answer("Отменено.", reply_markup=ReplyKeyboardRemove())
+        await message.answer("Вы не привязаны к боту. Можете отправить запрос на привязку", reply_markup=resident_access_request_kb())
+
     @router.callback_query(F.data == "resident:access_request")
     async def cb_access_request(cq: CallbackQuery, state: FSMContext) -> None:
         if cq.from_user is None or cq.message is None:
             await cq.answer()
             return
 
-        await state.set_state(SendAccessRequestStates.name)
+        places = await db.list_places()
+        await state.set_state(SendAccessRequestStates.place)
         await cq.message.answer(
-            "Введите имя:",
-            reply_markup=cancel_reply_kb()
+            "🏠 Выберите коливинг:",
+            reply_markup=places_pick_inline(places, prefix="req_place")
         )
         await cq.answer()
-    
-    @router.message(StateFilter(SendAccessRequestStates.name), F.text == "Отмена")
-    @router.message(StateFilter(SendAccessRequestStates.room), F.text == "Отмена")
-    async def cancel_access_request(message: Message, state: FSMContext) -> None:
-        await state.clear()
-        # Убираем Reply-клавиатуру с кнопкой "Отмена"
-        await message.answer("Отменено.", reply_markup=ReplyKeyboardRemove())
-        await message.answer("Вы не привязаны к боту. Можете отправить запрос на привязку", reply_markup=resident_access_request_kb())
-    
+
+    @router.callback_query(StateFilter(SendAccessRequestStates.place), F.data.startswith("req_place:"))
+    async def pick_place_for_request(cq: CallbackQuery, state: FSMContext) -> None:
+        if cq.message is None:
+            await cq.answer()
+            return
+        place_id = int(cq.data.split(":", 1)[1])
+        await state.update_data(place_id=place_id)
+        await state.set_state(SendAccessRequestStates.name)
+        await cq.message.answer("✏️ Введите имя:", reply_markup=cancel_reply_kb())
+        await cq.answer()
+        
     @router.message(StateFilter(SendAccessRequestStates.name))
     async def process_name(message: Message, state: FSMContext) -> None:
         name = message.text.strip()
         if not name:
             await message.answer("❌ Имя не может быть пустым.", reply_markup=cancel_reply_kb())
             return
-        
+
         await state.update_data(name=name)
+        data = await state.get_data()
+        place_id = int(data["place_id"])
+
         await state.set_state(SendAccessRequestStates.room)
-        rooms = await db.get_all_room_numbers()
-        await message.answer(
-            "🏠 Выберите комнату:",
-            reply_markup=rooms_reply_kb(rooms)
-        )
+        rooms = await db.get_all_room_numbers(place_id)
+        await message.answer("🚪 Выберите комнату:", reply_markup=rooms_reply_kb(rooms))
     
     @router.message(StateFilter(SendAccessRequestStates.room))
     async def process_room(message: Message, state: FSMContext) -> None:
@@ -95,17 +141,19 @@ def register_access_request_handlers(router: Router, db: Database) -> None:
         except ValueError as e:
             await message.answer(str(e), reply_markup=cancel_reply_kb())
             return
-        
+
         data = await state.get_data()
-        name = data.get("name")
-        
+        name = data["name"]
+        place_id = int(data["place_id"])
+
         await db.add_access_request(
             telegram_user_id=message.from_user.id,
             telegram_username=message.from_user.username,
             name=name,
             room_number=room_number,
+            place_id=place_id,
             requested_at=int(time.time())
         )
-        
+
         await state.clear()
         await message.answer("✅ Запрос отправлен администратору. Ожидайте подтверждения.", reply_markup=ReplyKeyboardRemove())

@@ -4,6 +4,8 @@ import html
 import logging
 import secrets
 import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart, CommandObject, StateFilter
@@ -13,12 +15,11 @@ from aiogram.types import CallbackQuery, Message
 from vpn_bot.config import Settings
 from vpn_bot.db import Database, normalize_room
 from vpn_bot.filters import IsAdmin
-from vpn_bot.keyboards import admin_main_kb, cancel_reply_kb, residents_pick_inline, rooms_reply_kb, resident_menu_kb, resident_access_request_kb, access_requests_list_kb, access_request_action_kb
-from vpn_bot.slug import make_client_email
+from vpn_bot.keyboards import admin_main_kb, cancel_reply_kb, residents_pick_inline, rooms_reply_kb, resident_menu_kb, resident_access_request_kb, access_requests_list_kb, access_request_action_kb, places_pick_inline, place_title_from_name
 from vpn_bot.states import AddResidentStates, ProcessAccessRequestStates
 from vpn_bot.texts import format_residents_list
 from vpn_bot.xui_client import XuiApiError, XuiClient
-from vpn_bot.handlers.common import handle_bind_link, register_access_request_handlers
+from vpn_bot.handlers.common import handle_bind_link, register_access_request_handlers, create_resident_with_checks
 
 logger = logging.getLogger(__name__)
 
@@ -55,26 +56,42 @@ def build_admin_router(settings: Settings, db: Database, xui: XuiClient) -> Rout
 
     @router.message(F.text == "📋 Список жителей", is_admin)
     async def list_residents(message: Message) -> None:
-        residents = await db.list_residents_grouped_with_room()
+        residents = await db.list_residents_grouped_with_place_and_room()
         if not residents:
             await message.answer("📭 Список жителей пуст.")
             return
+
         text = format_residents_list(residents)
-        # Telegram message limit ~4096
+
         chunk = 3800
         for i in range(0, len(text), chunk):
-            await message.answer(text[i : i + chunk], parse_mode="HTML", disable_web_page_preview=True)
+            await message.answer(text[i:i+chunk], parse_mode="HTML", disable_web_page_preview=True)
 
-    @router.message(F.text == "➕ Добавить жителя", is_admin)
-    async def add_begin(message: Message, state: FSMContext) -> None:
-        await state.set_state(AddResidentStates.first_name)
-        await message.answer("Введите имя жителя:", reply_markup=cancel_reply_kb())
-
+    @router.message(StateFilter(AddResidentStates.place), F.text == "Отмена", is_admin)
     @router.message(StateFilter(AddResidentStates.first_name), F.text == "Отмена", is_admin)
     @router.message(StateFilter(AddResidentStates.room), F.text == "Отмена", is_admin)
     async def add_cancel(message: Message, state: FSMContext) -> None:
         await state.clear()
         await update_admin_keyboard_with_access_request_count(db, message=message, message_text="Отменено")
+
+    @router.message(F.text == "➕ Добавить жителя", is_admin)
+    async def add_begin(message: Message, state: FSMContext) -> None:
+        places = await db.list_places()
+        await state.set_state(AddResidentStates.place)
+        await message.answer("🏠 Выберите коливинг:", reply_markup=places_pick_inline(places, prefix="adm_add_place"))
+
+    @router.callback_query(StateFilter(AddResidentStates.place), F.data.startswith("adm_add_place:"))
+    async def add_pick_place(cq: CallbackQuery, state: FSMContext) -> None:
+        if cq.message is None:
+            await cq.answer()
+            return
+
+        place_id = int(cq.data.split(":", 1)[1])
+        await state.update_data(place_id=place_id)
+
+        await state.set_state(AddResidentStates.first_name)
+        await cq.message.answer("✏️ Введите имя жителя:", reply_markup=cancel_reply_kb())
+        await cq.answer()
 
     @router.message(StateFilter(AddResidentStates.first_name), is_admin)
     async def add_first(message: Message, state: FSMContext) -> None:
@@ -82,14 +99,15 @@ def build_admin_router(settings: Settings, db: Database, xui: XuiClient) -> Rout
         if not name:
             await message.answer("❌ Имя не может быть пустым. Попробуйте ещё раз.")
             return
+
+        data = await state.get_data()
+        place_id = int(data["place_id"])  # уже выбран
+
         await state.update_data(first_name=name)
         await state.set_state(AddResidentStates.room)
-        rooms = await db.get_all_room_numbers()
-        # await message.answer("Введите фамилию.", reply_markup=cancel_reply_kb())
-        await message.answer(
-            "🏠 Выберите комнату для жителя:",
-            reply_markup=rooms_reply_kb(rooms)
-        )
+
+        rooms = await db.get_all_room_numbers(place_id)
+        await message.answer("🚪 Выберите комнату для жителя:", reply_markup=rooms_reply_kb(rooms))
  
     @router.message(StateFilter(AddResidentStates.room), is_admin)
     async def add_room(message: Message, state: FSMContext) -> None:
@@ -103,6 +121,7 @@ def build_admin_router(settings: Settings, db: Database, xui: XuiClient) -> Rout
         data = await state.get_data()
         first: str = data["first_name"]
         last: str = data.get("last_name", "")
+        place_id = int(data["place_id"])
 
         count = await db.count_residents()
         if count >= settings.max_residents:
@@ -113,36 +132,29 @@ def build_admin_router(settings: Settings, db: Database, xui: XuiClient) -> Rout
             )
             return
 
-        room = await db.get_room_by_room_number(room_number)
-        if room is None:
-            await state.clear()
-            await message.answer(f"Комнаты '{room_number}' не существует", reply_markup=admin_main_kb())
-            return
-        
-        room_residents_count = await db.count_residents_by_room_id(room.id)
-        max_residents = room.max_residents
-        if (room_residents_count + 1) > max_residents:
-            await state.clear()
-            await update_admin_keyboard_with_access_request_count(
-                db, 
-                message=message, 
-                message_text=f"Не удалось привязать жителя к комнате '{room_number}'. К ней привязано макс. возможное количество жителей: {max_residents})"
-            )
-            return
-        
         try:
-            email = make_client_email(room_number, last, first)
-            _, client_uuid, sub_id = await xui.add_vless_client(email, tg_id=0)
-            rid = await db.add_resident(first, last, room_number, email, client_uuid, sub_id)
+            rid, client_uuid = await create_resident_with_checks(
+                db=db,
+                xui=xui,
+                place_id=place_id,
+                first_name=first,
+                last_name=last,
+                room_number=room_number,
+                tg_id=0,
+            )
+        except ValueError as e:
+            await state.clear()
+            await update_admin_keyboard_with_access_request_count(db, message=message, message_text=f"❌ {html.escape(str(e))}")
+            return
         except XuiApiError as e:
             logger.exception("3x-ui add client failed")
             await state.clear()
             await update_admin_keyboard_with_access_request_count(db, message=message, message_text=f"Ошибка панели 3x-ui: {e}")
             return
-        except Exception as e:
+        except Exception:
             logger.exception("Unexpected error during resident creation")
-            # Пытаемся откатить клиента в XUI, если он был создан
-            if 'client_uuid' in locals():
+            # rollback клиента если успел создаться
+            if "client_uuid" in locals():
                 try:
                     await xui.delete_client(client_uuid)
                 except XuiApiError:
@@ -152,7 +164,11 @@ def build_admin_router(settings: Settings, db: Database, xui: XuiClient) -> Rout
             return
 
         await state.clear()
-        await update_admin_keyboard_with_access_request_count(db, message=message, message_text=f"Житель <b>{html.escape(first)}</b> ({html.escape(room_number)}) добавлен")
+        await update_admin_keyboard_with_access_request_count(
+            db,
+            message=message,
+            message_text=f"Житель <b>{html.escape(first)}</b> ({html.escape(room_number)}) добавлен",
+        )
 
     @router.message(F.text == "❌ Удалить жителя", is_admin)
     async def del_pick(message: Message) -> None:
@@ -161,7 +177,7 @@ def build_admin_router(settings: Settings, db: Database, xui: XuiClient) -> Rout
             await message.answer("Список пуст.")
             return
         await message.answer(
-            "Выберите жителя для удаления:",
+            "👤 Выберите жителя для удаления:",
             reply_markup=residents_pick_inline(residents, prefix="adm_del"),
         )
 
@@ -261,16 +277,17 @@ def build_admin_router(settings: Settings, db: Database, xui: XuiClient) -> Rout
             await cq.answer("Запрос не найден", show_alert=True)
             return
         
-        # Форматируем дату
-        from datetime import datetime
-        request_date = datetime.fromtimestamp(req.requested_at).strftime("%d.%m.%Y %H:%M")
+        MSK = ZoneInfo("Europe/Moscow")
+        request_date = datetime.fromtimestamp(req.requested_at, tz=MSK).strftime("%d.%m.%Y %H:%M")
         
+        place_title = place_title_from_name(req.place_name)
+
         text = (
             f"👤 <b>Запрос доступа</b>\n\n"
             f"Имя: <b>{html.escape(req.name)}</b>\n"
+            f"Коливинг: <b>{html.escape(place_title)}</b>\n"
             f"Комната: <b>{html.escape(req.room_number)}</b>\n"
             f"Дата запроса: {request_date}\n"
-            f"Telegram ID: <code>{req.telegram_user_id}</code>\n"
         )
         
         if req.telegram_username:
@@ -292,37 +309,53 @@ def build_admin_router(settings: Settings, db: Database, xui: XuiClient) -> Rout
         if cq.message is None:
             await cq.answer()
             return
-        
+
         request_id = int(cq.data.split(":")[2])
         req = await db.get_access_request_by_id(request_id)
-        
         if not req:
             await cq.answer("Запрос не найден", show_alert=True)
             return
-        
-        # Сохраняем данные запроса в состоянии
+
         await state.update_data(
             request_id=request_id,
             name=req.name,
             room_number=req.room_number,
+            place_id=req.place_id,  # дефолт из запроса
             telegram_user_id=req.telegram_user_id,
-            telegram_username=req.telegram_username
+            telegram_username=req.telegram_username,
         )
-        await state.set_state(ProcessAccessRequestStates.choosing_room)
-        
-        rooms = await db.get_all_room_numbers()
+
+        places = await db.list_places()
+        await state.set_state(ProcessAccessRequestStates.place)
         await cq.message.answer(
-            f"👤 <b>{html.escape(req.name)}</b> указал комнату <b>{html.escape(req.room_number)}</b>\n\n"
-            "Вы можете подтвердить эту комнату или выбрать другую:",
-            reply_markup=rooms_reply_kb(rooms),
-            parse_mode="HTML"
+            f"🏠Выберите коливинг для добавления <b>{html.escape(req.name)}</b>:",
+            reply_markup=places_pick_inline(places, prefix=f"process_place:{request_id}"),
+            parse_mode="HTML",
         )
         await cq.answer()
-    
+
+    @router.callback_query(StateFilter(ProcessAccessRequestStates.place), F.data.startswith("process_place:"))
+    async def process_pick_place(cq: CallbackQuery, state: FSMContext) -> None:
+        if cq.message is None:
+            await cq.answer()
+            return
+
+        # process_place:<request_id>:<place_id>
+        parts = cq.data.split(":")
+        request_id = int(parts[1])
+        place_id = int(parts[2])
+
+        await state.update_data(place_id=place_id)
+        await state.set_state(ProcessAccessRequestStates.choosing_room)
+
+        rooms = await db.get_all_room_numbers(place_id)
+        await cq.message.answer("🚪 Выберите комнату:", reply_markup=rooms_reply_kb(rooms))
+        await cq.answer()
+        
     @router.message(ProcessAccessRequestStates.choosing_room, F.text == "Отмена", is_admin)
     async def cancel_add_from_request(message: Message, state: FSMContext) -> None:
         await state.clear()
-        await message.answer("Добавление отменено.", reply_markup=admin_main_kb())
+        await update_admin_keyboard_with_access_request_count(db, message=message, message_text="Добавление отменено")
     
     @router.message(ProcessAccessRequestStates.choosing_room, is_admin)
     async def add_resident_from_request(message: Message, state: FSMContext) -> None:
@@ -335,29 +368,20 @@ def build_admin_router(settings: Settings, db: Database, xui: XuiClient) -> Rout
         data = await state.get_data()
         name = data["name"]
         request_id = data["request_id"]
+        place_id = int(data["place_id"])
         telegram_user_id = data["telegram_user_id"]
         telegram_username = data["telegram_username"]
         
-        room = await db.get_room_by_room_number(room_number)
-        if room is None:
-            await message.answer(
-                f"Комнаты '{room_number}' не существует",
-                reply_markup=cancel_reply_kb()
-            )
-            return
-        
-        room_residents_count = await db.count_residents_by_room_id(room.id)
-        if room_residents_count >= room.max_residents:
-            await message.answer(
-                f"❌ Комната {room_number} заполнена (макс. {room.max_residents} чел.)",
-                reply_markup=cancel_reply_kb()
-            )
-            return
-        
         try:
-            email = make_client_email(room_number, "", name)
-            _, client_uuid, sub_id = await xui.add_vless_client(email, tg_id=telegram_user_id)
-            rid = await db.add_resident(name, "", room_number, email, client_uuid, sub_id)
+            rid, client_uuid = await create_resident_with_checks(
+                db=db,
+                xui=xui,
+                place_id=place_id,
+                first_name=name,
+                last_name="",
+                room_number=room_number,
+                tg_id=telegram_user_id,
+            )
             
             # Привязываем Telegram сразу
             await db.bind_telegram(rid, telegram_user_id, telegram_username)
